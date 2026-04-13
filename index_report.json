@@ -1,0 +1,84 @@
+{
+  "indexed": [
+    {
+      "file": "ONC-17化學藥物治療引起的副作用-口腔黏膜炎.pdf",
+      "chunks": 9,
+      "category": "腫瘤",
+      "topic": "口腔黏膜炎"
+    },
+    {
+      "file": "ONC-18血小板減少症居家照顧注意事項.pdf",
+      "chunks": 9,
+      "category": "腫瘤",
+      "topic": "血小板減少症居家照顧注意事項"
+    },
+    {
+      "file": "ONC-19癌症病人紅血球減少之自我照顧.pdf",
+      "chunks": 9,
+      "category": "呼吸",
+      "topic": "癌症病人紅血球減少之自我照顧"
+    },
+    {
+      "file": "ONC-21化學治療引起之副作用-噁心嘔吐食慾不振.pdf",
+      "chunks": 8,
+      "category": "腫瘤",
+      "topic": "噁心嘔吐食慾不振"
+    },
+    {
+      "file": "ONC-22化學治療引起之副作用-腹瀉.pdf",
+      "chunks": 7,
+      "category": "泌尿",
+      "topic": "腹瀉"
+    },
+    {
+      "file": "ONC-23化學治療引起之副作用-便祕.pdf",
+      "chunks": 8,
+      "category": "腫瘤",
+      "topic": "便祕"
+    },
+    {
+      "file": "ONC-24化學治療引起之副作用-毛髮脫落.pdf",
+      "chunks": 11,
+      "category": "腫瘤",
+      "topic": "毛髮脫落"
+    },
+    {
+      "file": "ONC-25白血球低下之自我照顧.pdf",
+      "chunks": 9,
+      "category": "腫瘤",
+      "topic": "白血球低下之自我照顧"
+    },
+    {
+      "file": "ONC-35化學治療引起噁心嘔吐之穴位按摩.pdf",
+      "chunks": 7,
+      "category": "心臟",
+      "topic": "化學治療引起噁心嘔吐之穴位按摩"
+    },
+    {
+      "file": "ONC-37化學治療疲憊症狀的自我照護.pdf",
+      "chunks": 9,
+      "category": "心臟",
+      "topic": "化學治療疲憊症狀的自我照護"
+    },
+    {
+      "file": "ONC-38化學治療引起的周邊神經病變照顧.pdf",
+      "chunks": 9,
+      "category": "腫瘤",
+      "topic": "化學治療引起的周邊神經病變照顧"
+    },
+    {
+      "file": "ONC-39化學治療引起的過敏症狀照顧.pdf",
+      "chunks": 6,
+      "category": "呼吸",
+      "topic": "化學治療引起的過敏症狀照顧"
+    },
+    {
+      "file": "ONC-40化學治療引起的紅疹症狀照顧.pdf",
+      "chunks": 7,
+      "category": "泌尿",
+      "topic": "化學治療引起的紅疹症狀照顧"
+    }
+  ],
+  "skipped": [],
+  "errors": []
+}
