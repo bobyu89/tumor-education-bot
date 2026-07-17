@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2   # v2：新增 assessment_state（Phase 2）
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "tumor_bot.sqlite3"
 
 
@@ -140,6 +140,15 @@ CREATE TABLE IF NOT EXISTS events (
     patient_code TEXT,
     event_type   TEXT NOT NULL,
     payload      TEXT                          -- json
+);
+
+-- 進行中的症狀評估狀態（Phase 2）。一人同時一個評估，可持久化、重啟後續作。
+CREATE TABLE IF NOT EXISTS assessment_state (
+    patient_code TEXT PRIMARY KEY,
+    symptom      TEXT,
+    step         TEXT,                         -- ask_severity | ask_field
+    data         TEXT,                         -- json：已收集欄位
+    updated_at   TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -290,4 +299,64 @@ def get_patient_messages(patient_code: str) -> list[dict]:
             "FROM messages WHERE patient_code=? ORDER BY id",
             (patient_code,),
         ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── 症狀評估（Phase 2）────────────────────────────────────────────
+def get_assessment_state(patient_code: str) -> dict | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT symptom, step, data FROM assessment_state WHERE patient_code=?",
+            (patient_code,),
+        ).fetchone()
+    if not row:
+        return None
+    return {"symptom": row["symptom"], "step": row["step"],
+            "data": json.loads(row["data"] or "{}")}
+
+
+def set_assessment_state(patient_code: str, symptom: str, step: str, data: dict) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            """INSERT INTO assessment_state(patient_code, symptom, step, data, updated_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(patient_code) DO UPDATE SET
+                 symptom=excluded.symptom, step=excluded.step,
+                 data=excluded.data, updated_at=excluded.updated_at""",
+            (patient_code, symptom, step, json.dumps(data, ensure_ascii=False), _now()),
+        )
+
+
+def clear_assessment_state(patient_code: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM assessment_state WHERE patient_code=?", (patient_code,))
+
+
+def add_symptom_score(patient_code: str, esas_symptom: str, score: int | None,
+                      extra: dict | None = None, source: str = "patient_initiated") -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            """INSERT INTO symptom_scores(patient_code, esas_symptom, score, extra, ts, source)
+               VALUES (?,?,?,?,?,?)""",
+            (patient_code, esas_symptom, score,
+             json.dumps(extra or {}, ensure_ascii=False), _now(), source),
+        )
+        return cur.lastrowid
+
+
+def get_symptom_scores(patient_code: str, symptom: str | None = None) -> list[dict]:
+    """研究/趨勢用：取某病患的症狀分數（可指定症狀）。"""
+    with get_conn() as conn:
+        if symptom:
+            rows = conn.execute(
+                "SELECT esas_symptom, score, extra, ts, source FROM symptom_scores "
+                "WHERE patient_code=? AND esas_symptom=? ORDER BY ts",
+                (patient_code, symptom),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT esas_symptom, score, extra, ts, source FROM symptom_scores "
+                "WHERE patient_code=? ORDER BY ts",
+                (patient_code,),
+            ).fetchall()
     return [dict(r) for r in rows]

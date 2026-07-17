@@ -103,6 +103,24 @@ PRIMARY_MODEL=claude-sonnet-5
 
 ## 藍圖
 
-- **Phase 1（本版）**：持久化 + 紅旗 + 品質閘 + 認證 ✅
-- **Phase 2**：ESAS-r 症狀結構化追問 → 分級升級紅旗
+- **Phase 1**：持久化 + 紅旗 + 品質閘 + 認證 ✅
+- **Phase 2（本版）**：ESAS-r 症狀結構化追問 → 分級升級紅旗 ✅
 - **Phase 3**：症狀趨勢圖 + CSV 匯出、主動定時回報、知識測驗前後測、Telegram 主持人通知
+
+### Phase 2：症狀追問（`backend/assessment.py`）
+
+病患**回報症狀**時，機器人先做一段簡短的 ESAS-r 0–10 評估再回應：
+
+```
+「我一直拉肚子」
+  → 「聽起來您有腹瀉的不舒服…0 到 10 分您會給幾分？」
+  → 「3 分」  → 「今天大概拉了幾次？」
+  → 「一天七次」
+     · 次數≥6 或分數≥7 → 升級紅旗、通知護理師
+     · 否則           → 給 ONC-22 腹瀉衛教
+```
+
+分數落 `symptom_scores`（供第三期趨勢圖與研究匯出）。固定欄位驅動「問什麼」，
+措辭用溫暖模板（不需 API key），LLM 潤飾與自由文字抽取列為後續強化。
+支援 10 種化療症狀；發燒/出血/呼吸困難/自傷等由 Phase 1 紅旗直接攔截，不進評估。
+設計見 [`docs/specs/2026-07-17-phase2-symptom-assessment-design.md`](docs/specs/2026-07-17-phase2-symptom-assessment-design.md)。

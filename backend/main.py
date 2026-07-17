@@ -25,6 +25,7 @@ from models import ChatRequest, ChatResponse, PatientProfile, LoginRequest
 import db
 import auth
 import quality
+import assessment
 from redflag import screen as redflag_screen
 from rag import retriever
 from websocket_manager import manager
@@ -106,15 +107,13 @@ async def chat(request: ChatRequest):
     pid = request.patient_id
     db.ensure_session(pid)
 
-    # ① 紅旗瞬間篩檢 —— 先於 RAG/LLM
+    # ① 紅旗瞬間篩檢 —— 先於 RAG/LLM/評估
     flag = redflag_screen(request.message)
-
-    # 病患訊息落庫
     msg_id = db.add_message(pid, "patient", request.message,
                             redflag_level=flag.severity,
                             redflag_terms=flag.matched_keywords)
 
-    # ①-a HIGH：立刻推播 + 立刻回固定文字，不進 RAG/LLM
+    # ①-a HIGH：立刻推播 + 立刻回固定文字，不進 RAG/LLM/評估
     if flag.severity == "high":
         profile = _load_profile(pid) or request.patient_profile
         await manager.broadcast_alert({
@@ -136,33 +135,89 @@ async def chat(request: ChatRequest):
                             emergency_keywords=flag.matched_keywords,
                             session_id=pid, timestamp=datetime.now())
 
-    # ② RAG
-    profile = _load_profile(pid) or request.patient_profile
-    rag_docs = retriever.query(request.message)
+    # ② 症狀結構化追問（Phase 2）
+    state = db.get_assessment_state(pid)
+    if state:                                   # 評估進行中 → 處理回覆
+        ar = assessment.advance(pid, state, request.message)
+        if not ar.done:                         # 還在問 → 回問題
+            return _assess_reply(pid, ar, flag)
+        if ar.escalate:                         # 嚴重 → 升級紅旗
+            return await _escalate(pid, ar, msg_id)
+        if ar.educate:                          # 未達門檻 → 走該症狀衛教
+            lead = f"了解了，您的「{_sym_name(ar.symptom)}」嚴重度是 {ar.score}/10。以下提供一些照護建議：\n\n"
+            return await _rag_answer(pid, _edu_query(ar), flag, msg_id, lead=lead)
+        return _assess_reply(pid, ar, flag)     # 中止：回中止語
+    else:                                       # 無進行中評估 → 是否偵測到新症狀
+        proto = assessment.detect_symptom(request.message)
+        if proto is not None:
+            ar = assessment.start(pid, proto)
+            return _assess_reply(pid, ar, flag)
 
-    # ③ 品質前置：無來源 → 不進 LLM
+    # ③ 一般 RAG 問答
+    return await _rag_answer(pid, request.message, flag, msg_id,
+                             profile=request.patient_profile)
+
+
+def _assess_reply(pid: str, ar, flag) -> ChatResponse:
+    db.add_message(pid, "bot", ar.reply, answer_quality="assessment")
+    return ChatResponse(response=ar.reply, sources=[], is_emergency=False,
+                        emergency_keywords=flag.matched_keywords,
+                        session_id=pid, timestamp=datetime.now())
+
+
+async def _escalate(pid: str, ar, msg_id: int) -> ChatResponse:
+    profile = _load_profile(pid)
+    await manager.broadcast_alert({
+        "type": "SYMPTOM_ALERT", "severity": ar.escalate_level,
+        "patient_id": pid, "patient_name": profile.name if profile else pid,
+        "message": f"{_sym_name(ar.symptom)} 嚴重度 {ar.score}/10",
+        "keywords": [ar.symptom], "via": "assessment",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+    db.add_alert(pid, f"{ar.symptom}:{ar.score}", ar.escalate_level, msg_id,
+                 notified_channels=["websocket"])
+    db.add_message(pid, "bot", ar.reply, answer_quality="assessment_escalated")
+    return ChatResponse(response=ar.reply, sources=[], is_emergency=True,
+                        emergency_keywords=[ar.symptom],
+                        session_id=pid, timestamp=datetime.now())
+
+
+def _sym_name(key: str) -> str:
+    p = assessment._BY_KEY.get(key)
+    return p.name if p else key
+
+
+def _edu_query(ar) -> str:
+    """評估後衛教用的 RAG 查詢：用症狀名，命中對應 ONC 主題。"""
+    return f"{_sym_name(ar.symptom)}的自我照顧與注意事項"
+
+
+async def _rag_answer(pid: str, query_text: str, flag, msg_id: int,
+                      *, profile=None, lead: str = "") -> ChatResponse:
+    """RAG → 品質前置 → LLM → 品質標記 → 落庫。一般問答與評估後衛教共用。"""
+    profile = _load_profile(pid) or profile
+    rag_docs = retriever.query(query_text)
+
+    # 品質前置：無來源 → 不進 LLM
     if not quality.pre_check(rag_docs):
         reply = quality.DEFLECT_TEXT
-        db.add_message(pid, "bot", reply, rag_sources=[],
-                       answer_quality="deflected_no_source")
+        db.add_message(pid, "bot", reply, rag_sources=[], answer_quality="deflected_no_source")
         _record_medium_alert(pid, flag, msg_id)
         return ChatResponse(response=reply, sources=[], is_emergency=False,
                             emergency_keywords=flag.matched_keywords,
                             session_id=pid, timestamp=datetime.now())
 
-    # ④ LLM 生成
     system_prompt = build_prompt(profile, rag_docs)
     history = db.get_history(pid, limit=12)
     model_id = settings.PRIMARY_MODEL
-    client = get_client()
 
     try:
         result = await asyncio.to_thread(
-            client.generate, system_prompt, history, request.message, model_id
+            get_client().generate, system_prompt, history, query_text, model_id
         )
         reply = result.text
-        prompt_tokens, completion_tokens = result.prompt_tokens, result.completion_tokens
-        provider = result.provider
+        prompt_tokens, completion_tokens, provider = (
+            result.prompt_tokens, result.completion_tokens, result.provider)
     except LLMError as e:
         logging.error(f"[LLM Error] {e}")
         es = str(e)
@@ -173,25 +228,19 @@ async def chat(request: ChatRequest):
         else:
             reply = "⚠️ 系統暫時無法回應，請稍後再試或通知護理師。"
         db.add_message(pid, "bot", reply, rag_sources=[d["source"] for d in rag_docs],
-                       model_id=model_id, provider=settings.LLM_PROVIDER,
-                       answer_quality="llm_error")
+                       model_id=model_id, provider=settings.LLM_PROVIDER, answer_quality="llm_error")
         _record_medium_alert(pid, flag, msg_id)
-        return ChatResponse(response=reply, sources=[d["source"] for d in rag_docs],
+        return ChatResponse(response=lead + reply, sources=[d["source"] for d in rag_docs],
                             is_emergency=False, emergency_keywords=flag.matched_keywords,
                             session_id=pid, timestamp=datetime.now())
 
-    # ⑤ 品質標記
     q = quality.classify(reply, rag_docs)
-
-    # ⑥ 落庫
-    db.add_message(pid, "bot", reply,
-                   rag_sources=[d["source"] for d in rag_docs],
+    db.add_message(pid, "bot", lead + reply, rag_sources=[d["source"] for d in rag_docs],
                    model_id=model_id, provider=provider,
                    prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
                    answer_quality=q)
     _record_medium_alert(pid, flag, msg_id)
-
-    return ChatResponse(response=reply, sources=[d["source"] for d in rag_docs],
+    return ChatResponse(response=lead + reply, sources=[d["source"] for d in rag_docs],
                         is_emergency=False, emergency_keywords=flag.matched_keywords,
                         session_id=pid, timestamp=datetime.now())
 
