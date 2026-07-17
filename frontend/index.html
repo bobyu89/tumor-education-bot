@@ -496,17 +496,19 @@
   <div class="login-title">腫瘤衛教機器人</div>
   <div class="login-subtitle">Oncology Patient Education Assistant</div>
   <div class="login-card">
-    <label class="input-label">請輸入您的代號</label>
-    <input class="code-input" id="code-input" placeholder="病患：P001　研究者：R001" maxlength="20">
-    <div id="login-error" style="display:none;color:#b71c1c;font-size:12px;margin:-8px 0 12px;padding:8px 12px;background:#fff3f3;border-radius:8px;">
-      ❌ 代號不正確，請重新輸入
+    <label class="input-label">帳號</label>
+    <input class="code-input" id="account-input" placeholder="由院方發放的帳號" maxlength="40" autocomplete="username">
+    <label class="input-label" style="margin-top:10px;">密碼</label>
+    <input class="code-input" id="password-input" type="password" placeholder="密碼" maxlength="60" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()">
+    <div id="login-error" style="display:none;color:#b71c1c;font-size:12px;margin:8px 0 12px;padding:8px 12px;background:#fff3f3;border-radius:8px;">
+      ❌ 帳號或密碼錯誤
     </div>
-    <button class="btn-patient" id="login-btn" onclick="login()">
-      <span id="login-icon">🔑</span> <span id="login-text">進入系統</span>
+    <button class="btn-patient" id="login-btn" onclick="login()" style="margin-top:12px;">
+      <span id="login-icon">🔑</span> <span id="login-text">登入</span>
     </button>
   </div>
   <div class="login-disclaimer">
-    測試帳號：病患 <b>P001</b>　研究者 <b>R001</b><br>
+    測試帳號：病患 <b>P001 / patient123</b>　研究者 <b>R001 / research123</b><br>
     本系統僅供衛教參考，請遵從醫師指示
   </div>
 </div>
@@ -645,40 +647,48 @@
 // ── State ──
 let currentCode = '';
 let currentRole = '';
+let authToken = '';
 let selectedPatient = null;
 let wsNurse = null;
 let allSessions = [];
 const API = 'http://localhost:8000';
 
-// ── Login ──
+// ── Login（帳號 + 密碼，POST /login）──
 async function login() {
-  const code = document.getElementById('code-input').value.trim().toUpperCase();
-  if (!code) { showLoginError('請輸入代號'); return; }
+  const account = document.getElementById('account-input').value.trim();
+  const password = document.getElementById('password-input').value;
+  if (!account || !password) { showLoginError('請輸入帳號與密碼'); return; }
 
   const btn = document.getElementById('login-btn');
   document.getElementById('login-icon').textContent = '⏳';
-  document.getElementById('login-text').textContent = '驗證中...';
+  document.getElementById('login-text').textContent = '登入中...';
   btn.disabled = true;
 
   try {
-    const res = await fetch(`${API}/verify/${code}`);
-    const data = await res.json();
+    const res = await fetch(`${API}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account, password }),
+    });
 
-    if (!data.valid) {
-      showLoginError('代號不正確，請重新輸入');
+    if (!res.ok) {
+      showLoginError('帳號或密碼錯誤');
       return;
     }
+    const data = await res.json();
 
-    currentCode = data.code;
+    authToken = data.token;
     currentRole = data.role;
+    // 病患用 patient_code；研究者/管理者以帳號顯示
+    currentCode = data.patient_code || data.account;
     hideLoginError();
 
     if (data.role === 'patient') {
-      document.getElementById('nav-code').textContent = code;
+      document.getElementById('nav-code').textContent = currentCode;
       document.getElementById('init-time').textContent = now();
       showScreen('chat-screen');
     } else {
-      document.getElementById('r-code').textContent = code;
+      document.getElementById('r-code').textContent = currentCode;
       showScreen('researcher-screen');
       loadSessions();
       connectNurseWS();
@@ -687,7 +697,7 @@ async function login() {
     showLoginError('無法連線伺服器，請稍後再試');
   } finally {
     document.getElementById('login-icon').textContent = '🔑';
-    document.getElementById('login-text').textContent = '進入系統';
+    document.getElementById('login-text').textContent = '登入';
     btn.disabled = false;
   }
 }

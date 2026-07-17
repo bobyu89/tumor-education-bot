@@ -16,8 +16,20 @@ env/
 node_modules/
 npm-debug.log*
 
-# ChromaDB
+# ChromaDB（向量庫，可由 scripts 重建，不進版控）
 chroma_db/
+chroma_db_backup_*/
+
+# 嵌入模型權重（470MB ONNX，超過 GitHub 100MB 上限，需另行下載）
+models/
+
+# SQLite 資料庫（含病患資料，絕不進版控）
+*.sqlite3
+*.db
+data/
+
+# 本機工具
+.claude/
 
 # Logs
 *.log

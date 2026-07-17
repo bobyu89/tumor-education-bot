@@ -16,6 +16,11 @@ class PatientProfile(BaseModel):
     language: str = "zh-TW"
 
 
+class LoginRequest(BaseModel):
+    account: str
+    password: str
+
+
 class ChatRequest(BaseModel):
     patient_id: str
     message: str

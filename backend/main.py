@@ -1,250 +1,234 @@
 """
-AI 腫瘤衛教機器人 FastAPI 主程式（google-genai SDK）
+AI 腫瘤衛教機器人 FastAPI 主程式（Phase 1：地基與安全層）
+
+/chat 新流程（修正緊急延遲 bug）：
+  ① 紅旗瞬間篩檢（redflag.screen）—— 不進 RAG/LLM，< 1 秒
+     HIGH → 立刻 broadcast_alert + 立刻回固定安全文字 + 落庫 → return
+  ② RAG 查詢
+  ③ 品質前置：無合格來源 → 回「需請護理師」（不進 LLM）
+  ④ LLM 生成（llm_client，供應商抽象）
+  ⑤ 品質標記
+  ⑥ 全部落 SQLite（含紅旗等級、RAG來源、model、tokens、品質）
+     MEDIUM 紅旗在此併入 alerts
 """
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
-from datetime import datetime
-from google import genai
-from google.genai import types
+from datetime import datetime, timezone
+import asyncio
+import logging
 
 from config import settings
-from models import ChatRequest, ChatResponse, PatientProfile
-from alert import detect_emergency
+from models import ChatRequest, ChatResponse, PatientProfile, LoginRequest
+import db
+import auth
+import quality
+from redflag import screen as redflag_screen
 from rag import retriever
 from websocket_manager import manager
 from prompt import build_prompt
-
-# 初始化 Gemini client
-gemini_client = genai.Client(api_key=settings.GOOGLE_API_KEY)
+from llm_client import get_client, LLMError
 
 app = FastAPI(
     title="AI 腫瘤衛教機器人",
-    version="1.0.0",
-    description="基於 RAG + Gemini 的個人化癌症化療衛教系統"
+    version="1.1.0",
+    description="RAG + LLM 個人化癌症化療衛教系統（Phase 1：持久化 + 紅旗 + 品質閘 + 認證）",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 
-# 靜態前端
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
-# 記憶體 session store
-sessions: dict[str, list] = {}
-patient_profiles: dict[str, PatientProfile] = {}
-
-# 合法代碼白名單
-VALID_PATIENT_CODES = {"P001"}
-VALID_RESEARCHER_CODES = {"R001"}
-
 
 @app.on_event("startup")
-async def seed_test_data():
-    """啟動時植入測試帳號與示範對話"""
-    # 測試病患 P001
-    patient_profiles["P001"] = PatientProfile(
-        patient_id="P001",
-        name="測試病患",
-        age=58,
-        diagnosis=["口腔癌", "化學治療中"],
-        medications=["Cisplatin", "5-Fluorouracil"],
-        education_level="general",
-    )
-    # 植入兩輪示範對話，讓研究者介面一開始就有內容可看
-    sessions["P001"] = [
-        {"role": "user",    "content": "我化療之後嘴巴一直破，很痛怎麼辦？"},
-        {"role": "assistant","content": "口腔黏膜炎是化療常見副作用。建議每天用溫鹽水漱口4-6次，避免辛辣燙食，保持嘴唇濕潤。嚴重疼痛時請告知護理師。"},
-        {"role": "user",    "content": "那我可以喝果汁嗎？"},
-        {"role": "assistant","content": "可以，但建議選擇不太酸的果汁（如蘋果汁），並用吸管飲用，減少刺激口腔黏膜。"},
-    ]
+async def startup():
+    db.init_db()
+    _seed_if_empty()
 
 
-@app.get("/verify/{code}")
-async def verify_code(code: str):
-    """前端登入驗證：回傳代碼對應角色"""
-    code = code.strip().upper()
-    if code in VALID_PATIENT_CODES:
-        return {"valid": True, "role": "patient", "code": code}
-    if code in VALID_RESEARCHER_CODES:
-        return {"valid": True, "role": "researcher", "code": code}
-    return {"valid": False, "role": None, "code": code}
+def _seed_if_empty():
+    """首次啟動植入測試帳號與示範對話（僅在 DB 空時）。"""
+    with db.get_conn() as conn:
+        n = conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()["c"]
+    if n > 0:
+        return
+    # 測試帳號（正式環境請由管理者改密碼／重發）
+    auth.create_user("P001", "patient123", "patient", pseudonym="P001",
+                     real_name="測試病患", age=58, gender="男",
+                     cancer_type="口腔癌", diagnosis=["口腔癌", "化學治療中"],
+                     medications=["Cisplatin", "5-Fluorouracil"],
+                     education_level="general")
+    auth.create_user("R001", "research123", "researcher")
+    auth.create_user("A001", "admin123", "admin")
+    # 示範對話，讓研究者介面一開始有內容
+    db.add_message("P001", "patient", "我化療之後嘴巴一直破，很痛怎麼辦？", redflag_level="none")
+    db.add_message("P001", "bot",
+                   "口腔黏膜炎是化療常見副作用。建議每天用溫鹽水漱口4-6次，避免辛辣燙食，保持嘴唇濕潤。嚴重疼痛時請告知護理師。",
+                   rag_sources=["ONC-17 口腔黏膜炎"], answer_quality="grounded")
+    logging.info("[seed] 已植入測試帳號 P001/R001/A001 與示範對話")
 
 
+# ── 認證 ──────────────────────────────────────────────────────────
+@app.post("/login")
+async def login(req: LoginRequest):
+    result = auth.authenticate(req.account.strip(), req.password)
+    if not result:
+        raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
+    return result
+
+
+def _require_role(token: str, *roles: str) -> dict:
+    payload = auth.verify_token(token or "")
+    if not payload or payload["role"] not in roles:
+        raise HTTPException(status_code=403, detail="權限不足")
+    return payload
+
+
+# ── 首頁 ──────────────────────────────────────────────────────────
 @app.get("/")
 async def serve_frontend():
     index = FRONTEND_DIR / "index.html"
     if index.exists():
         return FileResponse(str(index))
-    return {"message": "AI 腫瘤衛教機器人 API v1.0"}
+    return {"message": "AI 腫瘤衛教機器人 API v1.1"}
 
 
+# ── 對話 ──────────────────────────────────────────────────────────
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    session_id = request.patient_id
-    if session_id not in sessions:
-        sessions[session_id] = []
+    pid = request.patient_id
+    db.ensure_session(pid)
 
-    # 1. 緊急關鍵字偵測
-    alert = detect_emergency(request.message)
+    # ① 紅旗瞬間篩檢 —— 先於 RAG/LLM
+    flag = redflag_screen(request.message)
 
-    # 2. RAG 查詢
-    profile = patient_profiles.get(request.patient_id) or request.patient_profile
+    # 病患訊息落庫
+    msg_id = db.add_message(pid, "patient", request.message,
+                            redflag_level=flag.severity,
+                            redflag_terms=flag.matched_keywords)
+
+    # ①-a HIGH：立刻推播 + 立刻回固定文字，不進 RAG/LLM
+    if flag.severity == "high":
+        profile = _load_profile(pid) or request.patient_profile
+        await manager.broadcast_alert({
+            "type": "EMERGENCY_ALERT", "severity": "high",
+            "patient_id": pid,
+            "patient_name": profile.name if profile else pid,
+            "message": request.message,
+            "keywords": flag.matched_keywords,
+            "via": flag.via,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        db.add_alert(pid, "；".join(flag.matched_keywords) or f"vector:{flag.via}",
+                     "high", msg_id, notified_channels=["websocket"])
+        db.log_event("redflag_high", pid, {"terms": flag.matched_keywords, "via": flag.via})
+        reply = ("這個狀況需要馬上讓護理師或醫師知道，請按旁邊的呼叫鈴，"
+                 "我已經同時通知護理站了。若情況緊急請直接撥打護理站電話或119。")
+        db.add_message(pid, "bot", reply, answer_quality="redflag_shortcut")
+        return ChatResponse(response=reply, sources=[], is_emergency=True,
+                            emergency_keywords=flag.matched_keywords,
+                            session_id=pid, timestamp=datetime.now())
+
+    # ② RAG
+    profile = _load_profile(pid) or request.patient_profile
     rag_docs = retriever.query(request.message)
 
-    # 3. 組裝個人化 System Prompt
+    # ③ 品質前置：無來源 → 不進 LLM
+    if not quality.pre_check(rag_docs):
+        reply = quality.DEFLECT_TEXT
+        db.add_message(pid, "bot", reply, rag_sources=[],
+                       answer_quality="deflected_no_source")
+        _record_medium_alert(pid, flag, msg_id)
+        return ChatResponse(response=reply, sources=[], is_emergency=False,
+                            emergency_keywords=flag.matched_keywords,
+                            session_id=pid, timestamp=datetime.now())
+
+    # ④ LLM 生成
     system_prompt = build_prompt(profile, rag_docs)
-
-    # 4. 選擇模型
-    model_id = settings.SECONDARY_MODEL if alert.is_emergency else settings.PRIMARY_MODEL
-
-    # 5. 對話歷史（最近 6 輪）
-    history = sessions[session_id][-12:]
-
-    # 6. 組裝 contents（Gemma 不支援 system_instruction，改注入精簡指令）
-    is_gemma = "gemma" in model_id.lower()
-    contents = []
-
-    if is_gemma:
-        # Gemma：將精簡版指令注入成 user/model 對話開頭
-        rag_context = "\n".join(
-            f"[資料{i+1}] {d['content'][:200]}" for i, d in enumerate(rag_docs[:3])
-        ) if rag_docs else "無相關衛教資料"
-        gemma_instruction = (
-            "你是腫瘤衛教護理師助理。安全規則：若提到胸痛/呼吸困難/想自傷，"
-            "立即說「請按呼叫鈴」。不診斷、不建議調整藥量。"
-            f"\n\n衛教資料：\n{rag_context}\n\n"
-            "請用親切中文回答以下問題，若資料不足請誠實說明。"
-        )
-        contents.append(types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=gemma_instruction)]
-        ))
-        contents.append(types.Content(
-            role="model",
-            parts=[types.Part.from_text(text="好的，我已了解。請問有什麼需要幫助的？")]
-        ))
-
-    # 加入對話歷史
-    for msg in history:
-        role = "user" if msg["role"] == "user" else "model"
-        contents.append(types.Content(
-            role=role,
-            parts=[types.Part.from_text(text=msg["content"])]
-        ))
-
-    # 最新使用者訊息
-    contents.append(types.Content(
-        role="user",
-        parts=[types.Part.from_text(text=request.message)]
-    ))
-
-    # 7. 呼叫 API（在 thread pool 執行，避免阻塞 async event loop）
-    import asyncio
-
-    def _call_api():
-        if is_gemma:
-            cfg = types.GenerateContentConfig(max_output_tokens=800, temperature=0.7)
-        else:
-            cfg = types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                max_output_tokens=800,
-                temperature=0.7,
-            )
-        return gemini_client.models.generate_content(
-            model=model_id, contents=contents, config=cfg
-        )
+    history = db.get_history(pid, limit=12)
+    model_id = settings.PRIMARY_MODEL
+    client = get_client()
 
     try:
-        resp_obj = await asyncio.to_thread(_call_api)
-        reply = resp_obj.text
-    except Exception as e:
-        import logging
-        logging.error(f"[Gemma API Error] {e}")
-        err_str = str(e)
-        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+        result = await asyncio.to_thread(
+            client.generate, system_prompt, history, request.message, model_id
+        )
+        reply = result.text
+        prompt_tokens, completion_tokens = result.prompt_tokens, result.completion_tokens
+        provider = result.provider
+    except LLMError as e:
+        logging.error(f"[LLM Error] {e}")
+        es = str(e)
+        if "429" in es or "RESOURCE_EXHAUSTED" in es:
             reply = "⚠️ 今日諮詢次數暫時用完，請明天再試。如有緊急狀況請按呼叫鈴通知護理師。"
-        elif "timeout" in err_str.lower():
+        elif "timeout" in es.lower():
             reply = "⚠️ 回應逾時，請重新提問。如有緊急狀況請按呼叫鈴通知護理師。"
         else:
             reply = "⚠️ 系統暫時無法回應，請稍後再試或通知護理師。"
+        db.add_message(pid, "bot", reply, rag_sources=[d["source"] for d in rag_docs],
+                       model_id=model_id, provider=settings.LLM_PROVIDER,
+                       answer_quality="llm_error")
+        _record_medium_alert(pid, flag, msg_id)
+        return ChatResponse(response=reply, sources=[d["source"] for d in rag_docs],
+                            is_emergency=False, emergency_keywords=flag.matched_keywords,
+                            session_id=pid, timestamp=datetime.now())
 
-    # 8. 更新對話紀錄
-    history.append({"role": "user", "content": request.message})
-    history.append({"role": "assistant", "content": reply})
-    sessions[session_id] = history
+    # ⑤ 品質標記
+    q = quality.classify(reply, rag_docs)
 
-    # 9. 緊急事件 WebSocket 推播
-    if alert.is_emergency:
-        patient_name = profile.name if profile else request.patient_id
-        await manager.broadcast_alert({
-            "type": "EMERGENCY_ALERT",
-            "severity": alert.severity,
-            "patient_id": request.patient_id,
-            "patient_name": patient_name,
-            "message": request.message,
-            "keywords": alert.matched_keywords,
-            "timestamp": datetime.now().isoformat()
-        })
+    # ⑥ 落庫
+    db.add_message(pid, "bot", reply,
+                   rag_sources=[d["source"] for d in rag_docs],
+                   model_id=model_id, provider=provider,
+                   prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+                   answer_quality=q)
+    _record_medium_alert(pid, flag, msg_id)
 
-    return ChatResponse(
-        response=reply,
-        sources=[d["source"] for d in rag_docs],
-        is_emergency=alert.is_emergency,
-        emergency_keywords=alert.matched_keywords,
-        session_id=session_id,
-        timestamp=datetime.now()
+    return ChatResponse(response=reply, sources=[d["source"] for d in rag_docs],
+                        is_emergency=False, emergency_keywords=flag.matched_keywords,
+                        session_id=pid, timestamp=datetime.now())
+
+
+def _record_medium_alert(pid: str, flag, msg_id: int):
+    if flag.severity == "medium":
+        db.add_alert(pid, "；".join(flag.matched_keywords) or f"vector:{flag.via}",
+                     "medium", msg_id, notified_channels=[])
+
+
+def _load_profile(patient_code: str) -> PatientProfile | None:
+    import json
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT pseudonym, real_name, age, cancer_type, diagnosis, medications, education_level "
+            "FROM patients WHERE pseudonym=?", (patient_code,)
+        ).fetchone()
+    if not row:
+        return None
+    return PatientProfile(
+        patient_id=row["pseudonym"], name=row["real_name"] or "病患",
+        age=row["age"],
+        diagnosis=json.loads(row["diagnosis"] or "[]"),
+        medications=json.loads(row["medications"] or "[]"),
+        education_level=row["education_level"] or "general",
     )
 
 
-@app.post("/patient/{patient_id}")
-async def upsert_patient(patient_id: str, profile: PatientProfile):
-    patient_profiles[patient_id] = profile
-    return {"status": "ok", "patient_id": patient_id}
-
-
+# ── 研究者查詢 ────────────────────────────────────────────────────
 @app.get("/history/{patient_id}")
 async def get_history(patient_id: str):
-    return {
-        "patient_id": patient_id,
-        "messages": sessions.get(patient_id, [])
-    }
+    return {"patient_id": patient_id, "messages": db.get_patient_messages(patient_id)}
 
 
 @app.get("/sessions")
 async def list_sessions():
-    """研究者用：列出所有 session 摘要"""
-    result = []
-    for pid, msgs in sessions.items():
-        profile = patient_profiles.get(pid)
-        flags = []
-        for msg in msgs:
-            if msg["role"] == "user":
-                a = detect_emergency(msg["content"])
-                if a.is_emergency:
-                    flags.append({
-                        "content": msg["content"],
-                        "severity": a.severity,
-                        "keywords": a.matched_keywords
-                    })
-
-        result.append({
-            "patient_id": pid,
-            "patient_name": profile.name if profile else pid,
-            "message_count": len(msgs),
-            "red_flags": flags,
-            "last_message": msgs[-1]["content"][:50] if msgs else "",
-            "has_emergency": len(flags) > 0
-        })
-    return result
+    return db.list_sessions_summary()
 
 
 @app.websocket("/ws/nurse")
@@ -262,6 +246,6 @@ async def health():
     return {
         "status": "ok",
         "rag_chunks": retriever.collection.count(),
-        "active_sessions": len(sessions),
-        "nurse_connections": manager.connection_count
+        "llm_provider": settings.LLM_PROVIDER,
+        "nurse_connections": manager.connection_count,
     }

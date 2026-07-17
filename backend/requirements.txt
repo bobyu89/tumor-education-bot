@@ -1,13 +1,27 @@
-fastapi==0.111.0
-uvicorn[standard]==0.30.0
-anthropic>=0.28.0
-chromadb==0.5.0
-python-dotenv==1.0.0
-pydantic==2.7.0
-pydantic-settings==2.3.0
-sentence-transformers==3.0.0
-pymupdf==1.24.0
-python-docx==1.1.0
-langchain==0.2.0
-langchain-community==0.2.0
-tiktoken
+# ── Web ──
+fastapi>=0.111
+uvicorn[standard]>=0.30
+
+# ── LLM 供應商 ──
+google-genai>=0.3            # Gemma（現用）
+anthropic>=0.28             # Claude Sonnet 5（之後啟用）
+
+# ── RAG / 向量庫 ──
+chromadb>=1.0
+
+# 嵌入模型（二選一）：
+#   sentence-transformers 需要 torch；若環境封鎖 torch（如 Windows Smart App Control），
+#   backend/embedding.py 會自動改用下方 ONNX 路徑（onnxruntime + tokenizers）。
+sentence-transformers>=3.0  # 選用：torch 可用時的首選
+onnxruntime>=1.20           # fallback：不需 torch
+tokenizers>=0.20
+numpy>=1.26
+
+# ── 設定 / 資料 ──
+pydantic>=2.7
+pydantic-settings>=2.3
+
+# ── 索引器（scripts/）──
+pymupdf>=1.24               # PDF 讀取
+python-docx>=1.1            # DOCX 讀取
+langchain-text-splitters>=0.2
