@@ -522,7 +522,7 @@
       <div class="nav-title">腫瘤衛教機器人</div>
       <div class="nav-status"><div class="status-dot"></div>線上</div>
     </div>
-    <span class="nav-icon">ℹ️</span>
+    <span class="nav-icon" onclick="openQuiz()" title="知識測驗">📝</span>
   </div>
 
   <div class="chat-area" id="chat-area">
@@ -663,6 +663,18 @@
   </div>
 </div>
 
+<!-- ══════════════ 知識測驗浮層（Phase 3b）══════════════ -->
+<div id="quiz-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;overflow:auto;">
+  <div style="max-width:560px;margin:24px auto;background:var(--surface,#fff);border-radius:16px;padding:20px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <h3 id="quiz-title" style="margin:0;color:var(--primary,#006B5F);">知識測驗</h3>
+      <span onclick="closeQuiz()" style="cursor:pointer;font-size:22px;color:#888;">✕</span>
+    </div>
+    <div id="quiz-phase-hint" style="font-size:12px;color:#888;margin-bottom:10px;"></div>
+    <div id="quiz-body">載入中…</div>
+  </div>
+</div>
+
 <script>
 // ── State ──
 let currentCode = '';
@@ -709,6 +721,79 @@ async function downloadCsv(table) {
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   } catch { alert('無法連線伺服器'); }
+}
+
+// ── 知識測驗（Phase 3b）──
+let quizCode = '', quizPhase = 'post';
+function openQuiz() {
+  document.getElementById('quiz-overlay').style.display = 'block';
+  loadQuizTopics();
+}
+function closeQuiz() { document.getElementById('quiz-overlay').style.display = 'none'; }
+
+async function loadQuizTopics() {
+  document.getElementById('quiz-title').textContent = '選擇測驗主題';
+  document.getElementById('quiz-phase-hint').textContent = '衛教前後各測一次，可看出學習成效';
+  const body = document.getElementById('quiz-body');
+  body.textContent = '載入中…';
+  try {
+    const topics = await (await fetch(`${API}/quiz/topics`)).json();
+    body.innerHTML = topics.map(t =>
+      `<div style="padding:10px;border:1px solid #ddd;border-radius:10px;margin-bottom:8px;cursor:pointer;"
+            onclick="startQuiz('${t.onc_code}')">
+         <b>${t.topic}</b> <span style="color:#888;font-size:12px;">（${t.n_questions} 題）</span>
+       </div>`).join('');
+  } catch { body.textContent = '無法載入測驗'; }
+}
+
+async function startQuiz(code) {
+  quizCode = code;
+  const phase = confirm('這是「衛教前」測驗嗎？\n\n確定＝前測(pre)　取消＝後測(post)') ? 'pre' : 'post';
+  quizPhase = phase;
+  const body = document.getElementById('quiz-body');
+  body.textContent = '載入中…';
+  try {
+    const q = await (await fetch(`${API}/quiz/${code}`)).json();
+    document.getElementById('quiz-title').textContent = q.topic;
+    document.getElementById('quiz-phase-hint').textContent =
+      (phase === 'pre' ? '前測（衛教前）' : '後測（衛教後）') + '　請作答後送出';
+    let html = '';
+    for (const item of q.questions) {
+      html += `<div style="margin-bottom:14px;"><div style="font-weight:600;">${item.n}. ${item.text}</div>`;
+      item.options.forEach((opt, i) => {
+        const val = item.type === 'tf' ? (i === 0 ? 'O' : 'X') : String(i + 1);
+        html += `<label style="display:block;padding:4px 0;cursor:pointer;">
+                   <input type="radio" name="q${item.n}" value="${val}"> ${opt}</label>`;
+      });
+      html += '</div>';
+    }
+    html += `<button class="btn-patient" onclick="submitQuiz()">送出測驗</button>`;
+    body.innerHTML = html;
+  } catch { body.textContent = '無法載入題目'; }
+}
+
+async function submitQuiz() {
+  const inputs = document.querySelectorAll('#quiz-body input[type=radio]:checked');
+  const answers = {};
+  inputs.forEach(el => { answers[el.name.slice(1)] = el.value; });
+  try {
+    const res = await fetch(`${API}/quiz/${quizCode}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ patient_id: currentCode, answers, phase: quizPhase }),
+    });
+    const r = await res.json();
+    const pct = Math.round(r.score / r.total * 100);
+    let html = `<div style="text-align:center;padding:12px;">
+        <div style="font-size:32px;font-weight:700;color:var(--primary,#006B5F);">${r.score} / ${r.total}</div>
+        <div style="color:#888;">答對 ${pct}%（${quizPhase === 'pre' ? '前測' : '後測'}）</div></div>`;
+    html += '<div style="font-size:13px;">';
+    for (const d of r.details) {
+      html += `<div style="padding:3px 0;">${d.correct ? '✅' : '❌'} 第 ${d.n} 題`
+        + (d.correct ? '' : `（您選 ${d.your || '未答'}，正解 ${d.answer}）`) + '</div>';
+    }
+    html += '</div><button class="btn-patient" style="margin-top:12px;" onclick="loadQuizTopics()">回主題列表</button>';
+    document.getElementById('quiz-body').innerHTML = html;
+  } catch { alert('送出失敗，請稍後再試'); }
 }
 
 // ── Login（帳號 + 密碼，POST /login）──

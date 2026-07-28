@@ -21,12 +21,13 @@ import asyncio
 import logging
 
 from config import settings
-from models import ChatRequest, ChatResponse, PatientProfile, LoginRequest
+from models import ChatRequest, ChatResponse, PatientProfile, LoginRequest, QuizSubmit
 import db
 import auth
 import quality
 import assessment
 import stats
+import quiz
 from redflag import screen as redflag_screen
 from rag import retriever
 from websocket_manager import manager
@@ -308,6 +309,31 @@ async def export_table(table: str, x_auth_token: str = Header(default="")):
         content, media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{table}.csv"'},
     )
+
+
+# ── 知識測驗（Phase 3b）────────────────────────────────────────────
+@app.get("/quiz/topics")
+async def quiz_topics():
+    return quiz.topics()
+
+
+@app.get("/quiz/{onc_code}")
+async def quiz_get(onc_code: str):
+    q = quiz.get_questions(onc_code)
+    if not q:
+        raise HTTPException(status_code=404, detail="無此主題測驗")
+    return q
+
+
+@app.post("/quiz/{onc_code}")
+async def quiz_submit(onc_code: str, req: QuizSubmit):
+    try:
+        result = quiz.score(req.patient_id, onc_code, req.answers, req.phase)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if result is None:
+        raise HTTPException(status_code=404, detail="無此主題測驗")
+    return result
 
 
 @app.websocket("/ws/nurse")

@@ -344,6 +344,15 @@ def add_symptom_score(patient_code: str, esas_symptom: str, score: int | None,
         return cur.lastrowid
 
 
+def add_quiz_result(patient_code: str, onc_code: str, phase: str, score: int) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO quiz_results(patient_code, onc_code, phase, score, ts) VALUES (?,?,?,?,?)",
+            (patient_code, onc_code, phase, score, _now()),
+        )
+        return cur.lastrowid
+
+
 def get_symptom_scores(patient_code: str, symptom: str | None = None) -> list[dict]:
     """研究/趨勢用：取某病患的症狀分數（可指定症狀）。"""
     with get_conn() as conn:

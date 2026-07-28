@@ -105,8 +105,23 @@ PRIMARY_MODEL=claude-sonnet-5
 
 - **Phase 1**：持久化 + 紅旗 + 品質閘 + 認證 ✅
 - **Phase 2**：ESAS-r 症狀結構化追問 → 分級升級紅旗 ✅
-- **Phase 3a（本版）**：研究統計 + 去識別化 CSV 匯出（研究者專屬）✅
-- **Phase 3b**：知識測驗前後測、主動定時回報、Telegram 主持人通知（需先申請 bot token）
+- **Phase 3a**：研究統計 + 去識別化 CSV 匯出（研究者專屬）✅
+- **Phase 3b（本版）**：知識測驗前後測（`backend/quiz.py`）✅
+- **Phase 3c**：主動定時回報、Telegram 主持人通知（需先申請 bot token）
+
+### Phase 3b：知識測驗（`backend/quiz.py`）
+
+前後測（pre/post）衡量衛教成效。題庫 `backend/quiz_bank.json` 由
+`scripts/build_quiz_bank.py` 從 13 份 ONC 單張的「護理指導評值」抽出（是非題 + 選擇題 + 正解），
+研究用途經嚴格解析與人工校正（ONC-21 原件解答題號誤植已修正並註明）。
+
+| 端點 | 用途 |
+|---|---|
+| `GET /quiz/topics` | 13 個可測驗主題 |
+| `GET /quiz/{onc_code}` | 出題（**不含答案**，防作弊） |
+| `POST /quiz/{onc_code}` | 提交作答，評分並存 `quiz_results`（phase=pre/post） |
+
+病患端由聊天畫面右上 📝 進入測驗；研究者 `/stats/overview` 可看各主題 pre/post 平均分。
 
 ### Phase 3a：研究統計與匯出（`backend/stats.py`）
 

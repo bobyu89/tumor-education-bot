@@ -27,6 +27,12 @@ class ChatRequest(BaseModel):
     patient_profile: Optional[PatientProfile] = None
 
 
+class QuizSubmit(BaseModel):
+    patient_id: str
+    answers: dict            # {題號: 作答}，如 {"1": "O", "4": "3"}
+    phase: str = "post"      # pre | post
+
+
 class ChatResponse(BaseModel):
     response: str
     sources: list[str]

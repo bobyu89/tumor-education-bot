@@ -53,12 +53,22 @@ def cohort_overview() -> dict:
         ).fetchall()
         answer_quality = {r["q"]: r["c"] for r in qrows}
 
+        # 知識測驗前後測：各主題 pre/post 平均分
+        qz = conn.execute(
+            """SELECT onc_code, phase, ROUND(AVG(score), 2) AS avg_score, COUNT(*) AS n
+               FROM quiz_results GROUP BY onc_code, phase"""
+        ).fetchall()
+        quiz: dict[str, dict] = {}
+        for r in qz:
+            quiz.setdefault(r["onc_code"], {})[r["phase"]] = {"avg": r["avg_score"], "n": r["n"]}
+
     return {
         "patients": patients,
         "messages": messages,
         "alerts": {"high": high, "medium": medium},
         "symptoms": symptoms,
         "answer_quality": answer_quality,
+        "quiz": quiz,
     }
 
 
