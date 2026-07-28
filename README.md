@@ -104,8 +104,23 @@ PRIMARY_MODEL=claude-sonnet-5
 ## 藍圖
 
 - **Phase 1**：持久化 + 紅旗 + 品質閘 + 認證 ✅
-- **Phase 2（本版）**：ESAS-r 症狀結構化追問 → 分級升級紅旗 ✅
-- **Phase 3**：症狀趨勢圖 + CSV 匯出、主動定時回報、知識測驗前後測、Telegram 主持人通知
+- **Phase 2**：ESAS-r 症狀結構化追問 → 分級升級紅旗 ✅
+- **Phase 3a（本版）**：研究統計 + 去識別化 CSV 匯出（研究者專屬）✅
+- **Phase 3b**：知識測驗前後測、主動定時回報、Telegram 主持人通知（需先申請 bot token）
+
+### Phase 3a：研究統計與匯出（`backend/stats.py`）
+
+研究者/管理者專屬端點（帶 `X-Auth-Token`）：
+
+| 端點 | 用途 |
+|---|---|
+| `GET /stats/overview` | 世代總覽：病患數、各症狀平均/嚴重度、紅旗數、回答品質分布 |
+| `GET /stats/patient/{code}` | 個別病患症狀時間序列 |
+| `GET /export/{table}.csv` | 去識別化 CSV（symptom_scores / messages / alerts / comprehension_checks） |
+
+**去識別化**：所有統計與匯出只用假名代號（P001…），永不輸出真實姓名。
+研究者頁新增「症狀統計」與「CSV 匯出」區。設計見
+[`docs/specs/2026-07-17-phase3a-stats-export-design.md`](docs/specs/2026-07-17-phase3a-stats-export-design.md)。
 
 ### Phase 2：症狀追問（`backend/assessment.py`）
 

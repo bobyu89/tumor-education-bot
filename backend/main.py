@@ -11,10 +11,10 @@ AI 腫瘤衛教機器人 FastAPI 主程式（Phase 1：地基與安全層）
   ⑥ 全部落 SQLite（含紅旗等級、RAG來源、model、tokens、品質）
      MEDIUM 紅旗在此併入 alerts
 """
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from pathlib import Path
 from datetime import datetime, timezone
 import asyncio
@@ -26,6 +26,7 @@ import db
 import auth
 import quality
 import assessment
+import stats
 from redflag import screen as redflag_screen
 from rag import retriever
 from websocket_manager import manager
@@ -87,7 +88,9 @@ async def login(req: LoginRequest):
 
 def _require_role(token: str, *roles: str) -> dict:
     payload = auth.verify_token(token or "")
-    if not payload or payload["role"] not in roles:
+    if not payload:
+        raise HTTPException(status_code=401, detail="請先登入")
+    if payload["role"] not in roles:
         raise HTTPException(status_code=403, detail="權限不足")
     return payload
 
@@ -278,6 +281,33 @@ async def get_history(patient_id: str):
 @app.get("/sessions")
 async def list_sessions():
     return db.list_sessions_summary()
+
+
+# ── 研究統計與匯出（Phase 3a，僅 researcher/admin）────────────────
+@app.get("/stats/overview")
+async def stats_overview(x_auth_token: str = Header(default="")):
+    _require_role(x_auth_token, "researcher", "admin")
+    return stats.cohort_overview()
+
+
+@app.get("/stats/patient/{code}")
+async def stats_patient(code: str, x_auth_token: str = Header(default="")):
+    _require_role(x_auth_token, "researcher", "admin")
+    return stats.patient_trends(code)
+
+
+@app.get("/export/{table}.csv")
+async def export_table(table: str, x_auth_token: str = Header(default="")):
+    _require_role(x_auth_token, "researcher", "admin")
+    try:
+        content = stats.export_csv(table)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    db.log_event("export_csv", None, {"table": table})
+    return PlainTextResponse(
+        content, media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{table}.csv"'},
+    )
 
 
 @app.websocket("/ws/nurse")

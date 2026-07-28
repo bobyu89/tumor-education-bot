@@ -640,6 +640,26 @@
         <button class="action-btn warn" onclick="notifyNurse()">🔔 通知護理師</button>
       </div>
     </div>
+
+    <!-- ── 統計 / 匯出（Phase 3a）── -->
+    <div class="r-section">
+      <div class="r-section-title">症狀統計</div>
+      <div id="stats-box" style="font-size:12px;color:var(--outline);">尚未載入</div>
+      <button class="action-btn" style="margin-top:8px;" onclick="loadStats()">📊 載入世代統計</button>
+    </div>
+
+    <div class="r-section">
+      <div class="r-section-title">研究資料匯出（去識別化 CSV）</div>
+      <div class="action-btns">
+        <button class="action-btn" onclick="downloadCsv('symptom_scores')">⬇️ 症狀分數</button>
+        <button class="action-btn" onclick="downloadCsv('messages')">⬇️ 對話紀錄</button>
+        <button class="action-btn" onclick="downloadCsv('alerts')">⬇️ 紅旗事件</button>
+        <button class="action-btn" onclick="downloadCsv('comprehension_checks')">⬇️ 了解程度</button>
+      </div>
+      <div style="font-size:11px;color:var(--outline);margin-top:6px;">
+        匯出僅含假名代號（P001…），不含真實姓名。
+      </div>
+    </div>
   </div>
 </div>
 
@@ -652,6 +672,44 @@ let selectedPatient = null;
 let wsNurse = null;
 let allSessions = [];
 const API = 'http://localhost:8000';
+
+// ── 統計 / 匯出（Phase 3a）──
+async function loadStats() {
+  const box = document.getElementById('stats-box');
+  box.textContent = '載入中…';
+  try {
+    const res = await fetch(`${API}/stats/overview`, { headers: { 'X-Auth-Token': authToken } });
+    if (!res.ok) { box.textContent = res.status === 403 ? '權限不足' : '載入失敗'; return; }
+    const d = await res.json();
+    let html = `<div>病患數：<b>${d.patients}</b>　紅旗：`
+      + `<b style="color:var(--red-flag)">${d.alerts.high}</b> 高 / ${d.alerts.medium} 中</div>`;
+    if (d.symptoms.length) {
+      html += '<table style="width:100%;margin-top:8px;border-collapse:collapse;font-size:12px;">'
+        + '<tr style="color:var(--outline);text-align:left;"><th>症狀</th><th>n</th><th>平均</th><th>嚴重</th></tr>';
+      for (const s of d.symptoms) {
+        html += `<tr><td>${s.symptom}</td><td>${s.n}</td><td>${s.avg_score ?? '—'}</td>`
+          + `<td style="color:${s.severe_n > 0 ? 'var(--amber)' : 'inherit'}">${s.severe_n}</td></tr>`;
+      }
+      html += '</table>';
+    } else {
+      html += '<div style="margin-top:6px;">尚無症狀分數</div>';
+    }
+    box.innerHTML = html;
+  } catch { box.textContent = '無法連線伺服器'; }
+}
+
+async function downloadCsv(table) {
+  try {
+    const res = await fetch(`${API}/export/${table}.csv`, { headers: { 'X-Auth-Token': authToken } });
+    if (!res.ok) { alert(res.status === 403 ? '權限不足' : '匯出失敗'); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${table}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch { alert('無法連線伺服器'); }
+}
 
 // ── Login（帳號 + 密碼，POST /login）──
 async function login() {
