@@ -49,27 +49,41 @@
 
 ```bash
 # 1. 安裝套件
-cd backend && pip install -r requirements.txt
+cd backend && pip install -r requirements.txt && cd ..
 
-# 2. 設定 .env（專案根目錄）
-GOOGLE_API_KEY=<你的 Google AI Studio API Key>
-LLM_PROVIDER=google
-PRIMARY_MODEL=gemma-3-12b-it
+# 2. 設定 .env（專案根目錄；.env 不進版控）
+cp .env.example .env
+#    預設 LLM_PROVIDER=mock（演示模式，不需 API key）
+#    要用真實模型：LLM_PROVIDER=google + GOOGLE_API_KEY=<Google AI Studio 金鑰>
 
 # 3. 建立向量索引（首次會下載嵌入模型）
 python -X utf8 scripts/index_vault.py --rebuild
 
-# 4. 啟動
+# 4.（可選）植入模擬案例：5 位虛構病患、兩週對話／症狀／警示／測驗
+python -X utf8 scripts/seed_demo.py --reset
+
+# 5. 啟動
 cd backend && python -X utf8 -m uvicorn main:app --port 8000
 
-# 5. 瀏覽器開 http://localhost:8000
+# 6. 瀏覽器開 http://localhost:8000
 ```
 
-### 測試帳號（首次啟動自動建立）
+### 演示（不需 API key）
+
+完整演示腳本見 [`docs/demo/演示腳本.md`](docs/demo/演示腳本.md)：9 個情境（一般問答、症狀評估、
+升級警示、HIGH 紅旗、否定語境、自傷語意、知識庫外轉介、測驗前後測、研究者匯出），
+每個情境給輸入原文與預期畫面。`python -X utf8 scripts/demo_dry_run.py` 會把全部情境自動跑一遍當彩排。
+
+演示模式（`LLM_PROVIDER=mock`）只把「生成」換成本地規則從檢索段落組裝，紅旗／評估／RAG／品質閘／落庫
+與正式模式完全相同；換真實模型只改 `.env`。
+
+### 測試帳號
+
+`scripts/seed_demo.py` 建立下列帳號（未執行 seed 時，首次啟動只會自動建立 P001／R001／A001）：
 
 | 帳號 | 密碼 | 角色 |
 |---|---|---|
-| P001 | patient123 | 病患 |
+| P001–P005 | patient123 | 病患（模擬，各有不同年齡／癌別／語氣） |
 | R001 | research123 | 研究者 |
 | A001 | admin123 | 管理者 |
 

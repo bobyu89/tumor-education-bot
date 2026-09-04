@@ -5,7 +5,8 @@
 
 - 病患資料存於 SQLite（`backend/db.py`），身分與研究資料分表（去識別化）。**含病患資料的檔案（`.env`、`data/*.sqlite3`、`chroma_db/`、`models/`）絕不進版控。**
 - 嵌入層 `backend/embedding.py` 在 torch 被封鎖時自動退回 ONNX（本機 Windows Smart App Control 會擋 torch）。
-- 測試不需 API key：`cd backend && python -X utf8 test_phase1.py`、`test_phase2.py`、`test_integration.py`。
+- 測試不需 API key：`cd backend && python -X utf8 test_phase1.py`、`test_phase2.py`、`test_phase3.py`、`test_quiz.py`、`test_integration.py`。
+- 演示不需 API key：`.env` 設 `LLM_PROVIDER=mock`；`scripts/seed_demo.py --reset` 植入模擬病患，`scripts/demo_dry_run.py` 彩排 9 個情境；腳本在 `docs/demo/演示腳本.md`。
 
 ## Agent skills
 

@@ -149,7 +149,8 @@ async def chat(request: ChatRequest):
             return await _escalate(pid, ar, msg_id)
         if ar.educate:                          # 未達門檻 → 走該症狀衛教
             lead = f"了解了，您的「{_sym_name(ar.symptom)}」嚴重度是 {ar.score}/10。以下提供一些照護建議：\n\n"
-            return await _rag_answer(pid, _edu_query(ar), flag, msg_id, lead=lead)
+            return await _rag_answer(pid, _edu_query(ar), flag, msg_id, lead=lead,
+                                     code=ar.onc_code)
         return _assess_reply(pid, ar, flag)     # 中止：回中止語
     else:                                       # 無進行中評估 → 是否偵測到新症狀
         proto = assessment.detect_symptom(request.message)
@@ -197,10 +198,11 @@ def _edu_query(ar) -> str:
 
 
 async def _rag_answer(pid: str, query_text: str, flag, msg_id: int,
-                      *, profile=None, lead: str = "") -> ChatResponse:
-    """RAG → 品質前置 → LLM → 品質標記 → 落庫。一般問答與評估後衛教共用。"""
+                      *, profile=None, lead: str = "", code: str | None = None) -> ChatResponse:
+    """RAG → 品質前置 → LLM → 品質標記 → 落庫。一般問答與評估後衛教共用。
+    code：限制檢索在單一衛教單張（評估後衛教用，症狀→單張對應是確定的）。"""
     profile = _load_profile(pid) or profile
-    rag_docs = retriever.query(query_text)
+    rag_docs = retriever.query(query_text, code_filter=code)
 
     # 品質前置：無來源 → 不進 LLM
     if not quality.pre_check(rag_docs):
