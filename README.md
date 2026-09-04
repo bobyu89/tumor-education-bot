@@ -6,6 +6,10 @@
 > ⚠️ 本系統僅供衛教參考，不做診斷、不建議藥物劑量。碰真實病患前請先完成 IRB 與資料隱私規範
 > （見 [`docs/specs/`](docs/specs/)）。
 
+**線上演示（GitHub Pages，純前端）**：<https://bobyu89.github.io/tumor-education-bot/> —— 紅旗攔截、症狀追問、
+有來源的衛教回覆與護理站即時警示都在瀏覽器內模擬，不需安裝、不需 API key。頁面由 `scripts/build_pages.py` 產生資料、
+`docs/demo_engine.js` 移植後端規則（`node scripts/test_pages_engine.js` 驗證）。
+
 ## 目前狀態：Phase 1（地基與安全層）
 
 本版重點是把三個地基問題補穩，讓後續的症狀追問（Phase 2）與研究統計（Phase 3）有可靠基礎：
