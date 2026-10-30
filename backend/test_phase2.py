@@ -4,6 +4,7 @@ Phase 2 症狀評估測試（不需 API key、不需 torch）。
 
 執行：cd backend && python -X utf8 test_phase2.py
 """
+import testutil  # 必須最先（設定 DEMO_SEED）
 import sys
 import tempfile
 from pathlib import Path
@@ -92,11 +93,11 @@ print("\n=== /chat 路由：偵測症狀 → 回評估問句 ===")
 from fastapi.testclient import TestClient
 import main
 with TestClient(main.app) as client:
-    client.post("/login", json={"account": "P001", "password": "patient123"})
+    P = testutil.login_headers(client, "P001", "patient123")
     db.clear_assessment_state("P001")
-    r = client.post("/chat", json={"patient_id": "P001", "message": "我嘴巴破了好不舒服"}).json()
+    r = client.post("/chat", json={"message": "我嘴巴破了好不舒服"}, headers=P).json()
     check("偵測 → 回問嚴重度（未進 LLM）", "幾分" in r["response"] and r["sources"] == [])
-    r = client.post("/chat", json={"patient_id": "P001", "message": "9分"}).json()
+    r = client.post("/chat", json={"message": "9分"}, headers=P).json()
     check("高分 → 升級為 emergency（未進 LLM）", r["is_emergency"] is True and "護理師" in r["response"])
 
 print(f"\n{'='*40}\n通過 {_pass} / {_pass + _fail}")

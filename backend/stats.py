@@ -110,5 +110,16 @@ def export_csv(table: str) -> str:
     writer = csv.writer(buf)
     writer.writerow(cols)
     for r in rows:
-        writer.writerow([r[c] for c in cols])
+        writer.writerow([_csv_safe(r[c]) for c in cols])
     return buf.getvalue()
+
+
+_FORMULA_PREFIX = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value):
+    """病患訊息若以 = + - @ 開頭，Excel 開啟時會當成公式執行（CSV injection，資安審查 M4）。
+    在前面加單引號讓 Excel 當純文字。只處理字串，數字不動。"""
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIX):
+        return "'" + value
+    return value

@@ -101,7 +101,8 @@ def build_prompt(
 
 
 def _format_patient_info(profile) -> str:
-    lines = [f"姓名：{profile.name or '病患'}"]
+    # 刻意不放姓名：回答不需要它，而且這段會送進第三方 LLM（資安審查 S5）
+    lines = []
     if profile.age:
         lines.append(f"年齡：{profile.age} 歲")
     if profile.diagnosis:

@@ -19,7 +19,25 @@ class Settings(BaseSettings):
     RAG_TOP_K: int = 5
 
     # ── 認證 ──
-    AUTH_SECRET: str = ""                      # 空則每次啟動隨機（重啟後 token 失效）
+    # token 簽章密鑰。正式環境務必設定固定值（多 worker 部署需一致）；
+    # 空值時每次啟動隨機產生，重啟後所有人需重新登入。
+    AUTH_SECRET: str = ""
+
+    # ── 帳號初始化（預設皆為安全值）──
+    DEMO_SEED: bool = False                    # True 才植入 P001/R001/A001 示範帳號（僅限本機）
+    ADMIN_ACCOUNT: str = "admin"               # 若尚無管理者且 ADMIN_PASSWORD 有值，啟動時建立
+    ADMIN_PASSWORD: str = ""
+
+    # ── 網頁 ──
+    # 前端與 API 同網域時不需要 CORS。只有前端放在別的網域才填，以逗號分隔。
+    CORS_ORIGINS: str = ""
+
+    # ── LINE（兩者皆有值才啟用 /line/webhook）──
+    LINE_CHANNEL_SECRET: str = ""
+    LINE_CHANNEL_ACCESS_TOKEN: str = ""
+
+    # 居家病患的緊急聯絡指引（LINE 管道使用；請與醫院確認正確號碼）
+    EMERGENCY_CONTACT: str = "請立即撥打 119，或聯絡血液腫瘤科 (02) 8792-7056"
 
     class Config:
         env_file = Path(__file__).parent.parent / ".env"

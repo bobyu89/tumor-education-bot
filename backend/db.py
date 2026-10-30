@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 2   # v2：新增 assessment_state（Phase 2）
+SCHEMA_VERSION = 3   # v2：assessment_state；v3：events.actor + LINE 通行碼綁定
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "tumor_bot.sqlite3"
 
 
@@ -151,6 +151,33 @@ CREATE TABLE IF NOT EXISTS assessment_state (
     updated_at   TEXT NOT NULL
 );
 
+-- LINE 通行碼（v3）。只存雜湊，明碼只在發碼當下顯示一次。
+CREATE TABLE IF NOT EXISTS binding_codes (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    code_hash    TEXT UNIQUE NOT NULL,
+    patient_code TEXT NOT NULL,
+    created_by   TEXT,
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    used_at      TEXT,
+    revoked_at   TEXT
+);
+
+-- LINE userId ↔ 病患代號（v3）。revoked_at 非空即失效。
+CREATE TABLE IF NOT EXISTS line_bindings (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    line_user_id TEXT NOT NULL,
+    patient_code TEXT NOT NULL,
+    bound_at     TEXT NOT NULL,
+    revoked_at   TEXT
+);
+
+-- LINE 會重送 webhook，以事件 ID 去重，避免同一個急症通知兩次（v3）
+CREATE TABLE IF NOT EXISTS line_events_seen (
+    event_id TEXT PRIMARY KEY,
+    ts       TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_version (
     version    INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL
@@ -159,15 +186,24 @@ CREATE TABLE IF NOT EXISTS schema_version (
 CREATE INDEX IF NOT EXISTS idx_messages_patient ON messages(patient_code, ts);
 CREATE INDEX IF NOT EXISTS idx_alerts_patient   ON alerts(patient_code, ts);
 CREATE INDEX IF NOT EXISTS idx_symptom_patient  ON symptom_scores(patient_code, ts);
+CREATE INDEX IF NOT EXISTS idx_events_patient   ON events(patient_code, ts);
+CREATE INDEX IF NOT EXISTS idx_line_bindings    ON line_bindings(line_user_id);
 """
 
 
 def init_db() -> None:
-    """建立所有表；冪等，可重複呼叫。"""
+    """建立所有表並套用遷移；冪等，可重複呼叫。"""
     with get_conn() as conn:
         conn.executescript(_SCHEMA)
+
+        # v3 遷移：events 加 actor（誰做的）。CREATE IF NOT EXISTS 不會幫舊表加欄位。
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(events)")}
+        if "actor" not in cols:
+            conn.execute("ALTER TABLE events ADD COLUMN actor TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_actor ON events(actor, ts)")
+
         row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
-        if row["v"] is None:
+        if row["v"] is None or row["v"] < SCHEMA_VERSION:
             conn.execute(
                 "INSERT INTO schema_version(version, applied_at) VALUES (?, ?)",
                 (SCHEMA_VERSION, _now()),
@@ -175,11 +211,14 @@ def init_db() -> None:
 
 
 # ── 稽核日誌 ──────────────────────────────────────────────────────
-def log_event(event_type: str, patient_code: str | None = None, payload: dict | None = None) -> None:
+def log_event(event_type: str, patient_code: str | None = None,
+              payload: dict | None = None, actor: str | None = None) -> None:
+    """actor：做這件事的人（研究者/管理者帳號、或 line:<userId>）。病患自己的動作可留空。"""
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO events(ts, patient_code, event_type, payload) VALUES (?,?,?,?)",
-            (_now(), patient_code, event_type, json.dumps(payload or {}, ensure_ascii=False)),
+            "INSERT INTO events(ts, patient_code, event_type, payload, actor) VALUES (?,?,?,?,?)",
+            (_now(), patient_code, event_type,
+             json.dumps(payload or {}, ensure_ascii=False), actor),
         )
 
 

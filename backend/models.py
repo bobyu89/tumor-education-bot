@@ -21,16 +21,23 @@ class LoginRequest(BaseModel):
     password: str
 
 
+# 病患身分一律來自登入 token（網頁）或 LINE 綁定，請求 body 不再自報 patient_id
+# —— 先前可以在 body 填任何代號冒用他人（資安審查 S3）。多送的欄位會被忽略。
 class ChatRequest(BaseModel):
-    patient_id: str
     message: str
-    patient_profile: Optional[PatientProfile] = None
 
 
 class QuizSubmit(BaseModel):
-    patient_id: str
     answers: dict            # {題號: 作答}，如 {"1": "O", "4": "3"}
     phase: str = "post"      # pre | post
+
+
+class PatientCreate(BaseModel):
+    pseudonym: str                       # P001 格式
+    cancer_type: Optional[str] = None
+    age: Optional[int] = None
+    gender: Optional[str] = None
+    education_level: str = "general"     # simple | general | detailed
 
 
 class ChatResponse(BaseModel):

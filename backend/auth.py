@@ -18,10 +18,19 @@ import os
 import secrets
 import time
 
+import logging
+
+from config import settings
 from db import get_conn, _now, log_event
 
-# token 簽章密鑰：優先讀環境變數，否則本機隨機生成（重啟後舊 token 失效）
-_SECRET = os.environ.get("AUTH_SECRET", secrets.token_hex(32)).encode()
+# token 簽章密鑰。必須從 settings 讀：pydantic-settings 讀 .env 時不會寫回 os.environ，
+# 先前用 os.environ.get 導致 .env 裡的 AUTH_SECRET 永遠讀不到。
+if settings.AUTH_SECRET:
+    _SECRET = settings.AUTH_SECRET.encode()
+else:
+    _SECRET = secrets.token_hex(32).encode()
+    logging.warning("[auth] AUTH_SECRET 未設定，本次啟動使用隨機密鑰；重啟後所有人需重新登入。"
+                    "正式環境請在 .env 設定固定值。")
 _TOKEN_TTL = 12 * 3600            # 12 小時
 _PBKDF2_ROUNDS = 200_000
 
@@ -31,6 +40,9 @@ def hash_password(password: str) -> str:
     salt = secrets.token_bytes(16)
     dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, _PBKDF2_ROUNDS)
     return f"pbkdf2${_PBKDF2_ROUNDS}${salt.hex()}${dk.hex()}"
+
+
+_DUMMY_HASH = hash_password(secrets.token_hex(8))
 
 
 def verify_password(password: str, stored: str) -> bool:
@@ -47,7 +59,8 @@ def verify_password(password: str, stored: str) -> bool:
 
 # ── 帳號管理（管理者用）──────────────────────────────────────────
 def create_user(account: str, password: str, role: str,
-                *, pseudonym: str | None = None, **patient_fields) -> int:
+                *, pseudonym: str | None = None, created_by: str | None = None,
+                **patient_fields) -> int:
     """建立帳號。role='patient' 時同時在 patients 表建立對應資料。"""
     if role not in ("patient", "researcher", "admin"):
         raise ValueError(f"未知角色：{role}")
@@ -75,7 +88,7 @@ def create_user(account: str, password: str, role: str,
                     _now(),
                 ),
             )
-    log_event("user_created", pseudonym, {"account": account, "role": role})
+    log_event("user_created", pseudonym, {"account": account, "role": role}, actor=created_by)
     return uid
 
 
@@ -86,7 +99,12 @@ def authenticate(account: str, password: str) -> dict | None:
         row = conn.execute(
             "SELECT id, password_hash, role FROM users WHERE account=?", (account,)
         ).fetchone()
-        if not row or not verify_password(password, row["password_hash"]):
+        if not row:
+            verify_password(password, _DUMMY_HASH)   # 讓「帳號不存在」與「密碼錯誤」耗時相同
+            log_event("login_failed", None, {"account": account}, actor=account)
+            return None
+        if not verify_password(password, row["password_hash"]):
+            log_event("login_failed", None, {"account": account}, actor=account)
             return None
         patient_code = None
         if row["role"] == "patient":
@@ -95,7 +113,7 @@ def authenticate(account: str, password: str) -> dict | None:
             ).fetchone()
             patient_code = p["pseudonym"] if p else None
     token = _make_token(account, row["role"], patient_code)
-    log_event("login", patient_code, {"account": account, "role": row["role"]})
+    log_event("login", patient_code, {"account": account, "role": row["role"]}, actor=account)
     return {"token": token, "role": row["role"], "account": account,
             "patient_code": patient_code}
 

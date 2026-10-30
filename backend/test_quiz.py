@@ -4,6 +4,7 @@ Phase 3b 知識測驗測試（不需 API key）。
 
 執行：cd backend && python -X utf8 test_quiz.py
 """
+import testutil  # 必須最先（設定 DEMO_SEED）
 import sys
 import tempfile
 from pathlib import Path
@@ -61,11 +62,12 @@ print("\n=== 端點（TestClient）===")
 from fastapi.testclient import TestClient
 import main
 with TestClient(main.app) as client:
+    P = testutil.login_headers(client, "P001", "patient123")
     r = client.get("/quiz/topics")
     check("/quiz/topics → 13", r.status_code == 200 and len(r.json()) == 13)
     r = client.get("/quiz/ONC-22")
     check("/quiz/ONC-22 出題且無答案", r.status_code == 200 and all("answer" not in i for i in r.json()["questions"]))
-    r = client.post("/quiz/ONC-22", json={"patient_id": "P001",
+    r = client.post("/quiz/ONC-22", headers=P, json={
         "answers": {"1":"X","2":"O","3":"X","4":"4","5":"4","6":"4"}, "phase": "post"})
     check("/quiz/ONC-22 提交 → 6/6（腹瀉正解）", r.status_code == 200 and r.json()["score"] == 6)
     r = client.get("/quiz/ONC-99")

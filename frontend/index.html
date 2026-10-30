@@ -20,7 +20,7 @@
     --on-surface: #191c1d;
     --on-surface-var: #3d4947;
     --secondary-container: #8bf1e6;
-    --outline: #6d7a77;
+    --outline: #56625f;   /* 原 #6d7a77 在淺綠底對比僅 4.0:1，未達 WCAG AA */
     --outline-var: #bdc9c6;
     --error: #ba1a1a;
     --amber: #e65100;
@@ -508,7 +508,7 @@
     </button>
   </div>
   <div class="login-disclaimer">
-    測試帳號：病患 <b>P001 / patient123</b>　研究者 <b>R001 / research123</b><br>
+    帳號由院方發放<br>
     本系統僅供衛教參考，請遵從醫師指示
   </div>
 </div>
@@ -668,9 +668,9 @@
   <div style="max-width:560px;margin:24px auto;background:var(--surface,#fff);border-radius:16px;padding:20px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
       <h3 id="quiz-title" style="margin:0;color:var(--primary,#006B5F);">知識測驗</h3>
-      <span onclick="closeQuiz()" style="cursor:pointer;font-size:22px;color:#888;">✕</span>
+      <span onclick="closeQuiz()" style="cursor:pointer;font-size:22px;color:var(--outline);">✕</span>
     </div>
-    <div id="quiz-phase-hint" style="font-size:12px;color:#888;margin-bottom:10px;"></div>
+    <div id="quiz-phase-hint" style="font-size:12px;color:var(--outline);margin-bottom:10px;"></div>
     <div id="quiz-body">載入中…</div>
   </div>
 </div>
@@ -683,7 +683,21 @@ let authToken = '';
 let selectedPatient = null;
 let wsNurse = null;
 let allSessions = [];
-const API = 'http://localhost:8000';
+// 前端與 API 由同一個服務提供，用相對路徑（部署到 HTTPS 網域也不用改）
+const API = '';
+
+// 所有 API 呼叫都帶登入 token；伺服器從 token 判斷身分，不再相信 body 裡自報的代號
+async function apiFetch(path, opts = {}) {
+  const headers = { ...(opts.headers || {}), 'X-Auth-Token': authToken };
+  if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  const res = await fetch(`${API}${path}`, { ...opts, headers });
+  if (res.status === 401) {
+    alert('登入已過期，請重新登入');
+    showScreen('login-screen');
+    throw new Error('unauthorized');
+  }
+  return res;
+}
 
 // ── 統計 / 匯出（Phase 3a）──
 async function loadStats() {
@@ -741,7 +755,7 @@ async function loadQuizTopics() {
     body.innerHTML = topics.map(t =>
       `<div style="padding:10px;border:1px solid #ddd;border-radius:10px;margin-bottom:8px;cursor:pointer;"
             onclick="startQuiz('${t.onc_code}')">
-         <b>${t.topic}</b> <span style="color:#888;font-size:12px;">（${t.n_questions} 題）</span>
+         <b>${t.topic}</b> <span style="color:var(--outline);font-size:12px;">（${t.n_questions} 題）</span>
        </div>`).join('');
   } catch { body.textContent = '無法載入測驗'; }
 }
@@ -777,15 +791,15 @@ async function submitQuiz() {
   const answers = {};
   inputs.forEach(el => { answers[el.name.slice(1)] = el.value; });
   try {
-    const res = await fetch(`${API}/quiz/${quizCode}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ patient_id: currentCode, answers, phase: quizPhase }),
+    const res = await apiFetch(`/quiz/${quizCode}`, {
+      method: 'POST',
+      body: JSON.stringify({ answers, phase: quizPhase }),
     });
     const r = await res.json();
     const pct = Math.round(r.score / r.total * 100);
     let html = `<div style="text-align:center;padding:12px;">
         <div style="font-size:32px;font-weight:700;color:var(--primary,#006B5F);">${r.score} / ${r.total}</div>
-        <div style="color:#888;">答對 ${pct}%（${quizPhase === 'pre' ? '前測' : '後測'}）</div></div>`;
+        <div style="color:var(--outline);">答對 ${pct}%（${quizPhase === 'pre' ? '前測' : '後測'}）</div></div>`;
     html += '<div style="font-size:13px;">';
     for (const d of r.details) {
       html += `<div style="padding:3px 0;">${d.correct ? '✅' : '❌'} 第 ${d.n} 題`
@@ -874,10 +888,9 @@ async function sendMessage() {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 90000); // 90s timeout
-    const res = await fetch(`${API}/chat`, {
+    const res = await apiFetch('/chat', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ patient_id: currentCode, message: text }),
+      body: JSON.stringify({ message: text }),
       signal: controller.signal
     });
     clearTimeout(timer);
@@ -937,7 +950,7 @@ function showTyping(show) {
 // ── Researcher ──
 async function loadSessions() {
   try {
-    const res = await fetch(`${API}/sessions`);
+    const res = await apiFetch('/sessions');
     allSessions = await res.json();
     renderSidebar(allSessions);
   } catch {
@@ -956,13 +969,14 @@ function renderSidebar(sessions) {
     return;
   }
 
+  // 代號放 data-code 屬性（經 escHtml），不拼進 onclick 的 JS 字串（資安審查 S4）
   list.innerHTML = sessions.map(s => `
     <div class="r-patient-card ${s.has_emergency ? 'flag' : ''}"
-         onclick="selectPatient('${s.patient_id}')">
+         data-code="${escHtml(s.patient_code)}" onclick="selectPatient(this.dataset.code)">
       <div class="r-card-top">
         <span class="r-pid">
           ${s.has_emergency ? '🚨 ' : '<span class="online-dot"></span> '}
-          ${escHtml(s.patient_id)}
+          ${escHtml(s.patient_code)}
         </span>
         ${s.has_emergency ? '<span class="flag-badge">RED FLAG</span>' : '<span class="r-time">活躍</span>'}
       </div>
@@ -975,7 +989,7 @@ async function selectPatient(pid) {
   selectedPatient = pid;
   document.querySelectorAll('.r-patient-card').forEach(c => c.classList.remove('active'));
 
-  const session = allSessions.find(s => s.patient_id === pid);
+  const session = allSessions.find(s => s.patient_code === pid);
   if (!session) return;
 
   // Highlight active card
@@ -991,9 +1005,9 @@ async function selectPatient(pid) {
   // Alert banner
   const banner = document.getElementById('r-alert-banner');
   if (session.has_emergency && session.red_flags.length) {
-    const kws = session.red_flags.flatMap(f => f.keywords).join('、');
+    const kws = session.red_flags.map(f => f.trigger).join('、');
     document.getElementById('r-alert-text').textContent =
-      `偵測到紅旗關鍵字：${kws}`;
+      `偵測到紅旗：${kws}`;
     banner.classList.add('show');
   } else {
     banner.classList.remove('show');
@@ -1001,29 +1015,30 @@ async function selectPatient(pid) {
 
   // Load full history
   try {
-    const res = await fetch(`${API}/history/${pid}`);
+    const res = await apiFetch(`/history/${encodeURIComponent(pid)}`);
     const data = await res.json();
-    renderTimeline(data.messages, session.red_flags);
+    renderTimeline(data.messages);
   } catch {
-    renderTimeline([], []);
+    renderTimeline([]);
   }
 
   // Red flag records panel
   renderFlagRecords(allSessions);
 }
 
-function renderTimeline(msgs, flags) {
+function renderTimeline(msgs) {
   const timeline = document.getElementById('r-timeline');
   if (!msgs.length) {
     timeline.innerHTML = '<div class="no-session"><div class="no-session-icon">💬</div><div>此病患尚無對話紀錄</div></div>';
     return;
   }
 
-  const flagContent = flags.flatMap(f => [f.content]);
+  // 後端訊息角色為 'patient' / 'bot'；紅旗直接看每則訊息的 redflag_level
   timeline.innerHTML = msgs.map(msg => {
-    const isFlag = msg.role === 'user' && flagContent.some(fc => msg.content.includes(fc.substring(0,10)));
-    const role = msg.role === 'user' ? 'patient' : 'ai';
-    const roleLabel = msg.role === 'user' ? '病患' : 'AI助理';
+    const isPatient = msg.role === 'patient';
+    const isFlag = isPatient && (msg.redflag_level === 'high' || msg.redflag_level === 'medium');
+    const role = isPatient ? 'patient' : 'ai';
+    const roleLabel = isPatient ? '病患' : 'AI助理';
     const cls = isFlag ? 'flag-msg' : `${role}-msg`;
     const tagCls = isFlag ? 'flag' : role;
     return `
@@ -1042,7 +1057,7 @@ function renderTimeline(msgs, flags) {
 function renderFlagRecords(sessions) {
   const container = document.getElementById('r-flag-records');
   const allFlags = sessions.flatMap(s =>
-    s.red_flags.map(f => ({...f, pid: s.patient_id}))
+    s.red_flags.map(f => ({...f, pid: s.patient_code}))
   );
   if (!allFlags.length) {
     container.innerHTML = '<div class="empty-flag">目前無警示紀錄</div>';
@@ -1052,10 +1067,10 @@ function renderFlagRecords(sessions) {
     <div class="flag-record">
       <div class="flag-record-top">
         <span class="flag-pid">🚨 ${escHtml(f.pid)}</span>
-        <span class="flag-sev ${f.severity === 'high' ? 'sev-high' : 'sev-medium'}">${f.severity.toUpperCase()}</span>
+        <span class="flag-sev ${f.level === 'high' ? 'sev-high' : 'sev-medium'}">${escHtml(String(f.level).toUpperCase())}</span>
       </div>
-      <div class="flag-kw">${escHtml(f.keywords.join('、'))}</div>
-      <div class="flag-time">${escHtml(f.content.substring(0, 40))}...</div>
+      <div class="flag-kw">${escHtml(f.trigger)}</div>
+      <div class="flag-time">${escHtml(fmtTime(f.ts))}</div>
     </div>
   `).join('');
 }
@@ -1064,7 +1079,7 @@ function refreshSessions() { loadSessions(); }
 
 function exportSession() {
   if (!selectedPatient) { alert('請先選擇病患'); return; }
-  const s = allSessions.find(x => x.patient_id === selectedPatient);
+  const s = allSessions.find(x => x.patient_code === selectedPatient);
   if (!s) return;
   const blob = new Blob([JSON.stringify(s, null, 2)], {type: 'application/json'});
   const a = document.createElement('a');
@@ -1073,18 +1088,24 @@ function exportSession() {
   a.click();
 }
 
-function notifyNurse() { alert('已發送通知至護理站'); }
+// 原本這顆按鈕只會跳出「已發送通知至護理站」，實際上什麼都沒送。
+// 醫療系統裡假的「已通知」比沒有按鈕更危險，所以改成實話，等真的串好通知管道再接上。
+function notifyNurse() {
+  alert('尚未串接通知管道，此按鈕不會送出任何通知。\n請直接以電話或院內系統聯絡護理站。');
+}
 
 // ── WebSocket (Nurse Alert) ──
 function connectNurseWS() {
   try {
-    wsNurse = new WebSocket(`ws://localhost:8000/ws/nurse`);
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    wsNurse = new WebSocket(`${proto}://${location.host}/ws/nurse?token=${encodeURIComponent(authToken)}`);
     wsNurse.onmessage = (e) => {
       const data = JSON.parse(e.data);
-      if (data.type === 'EMERGENCY_ALERT') {
+      if (data.type === 'EMERGENCY_ALERT' || data.type === 'SYMPTOM_ALERT') {
         const banner = document.getElementById('r-alert-banner');
+        const via = data.channel === 'line' ? '（LINE・居家）' : '';
         document.getElementById('r-alert-text').textContent =
-          `即時警報｜${data.patient_id}：${data.keywords.join('、')}`;
+          `即時警報${via}｜${data.patient_id}：${(data.keywords || []).join('、')}`;
         banner.classList.add('show');
         loadSessions(); // 重新整理列表
       }
@@ -1096,17 +1117,19 @@ function connectNurseWS() {
 function now() {
   return new Date().toLocaleTimeString('zh-TW', {hour:'2-digit', minute:'2-digit'});
 }
+function fmtTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d) ? String(iso) : d.toLocaleString('zh-TW', {hour12: false});
+}
 function escHtml(str) {
-  return String(str)
+  return String(str ?? '')
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/\n/g,'<br>');
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\n/g,'<br>');
 }
 
 // Init
 document.getElementById('init-time').textContent = now();
-document.getElementById('code-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') login();
-});
 </script>
 </body>
 </html>

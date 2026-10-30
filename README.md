@@ -55,17 +55,21 @@ cd backend && pip install -r requirements.txt
 GOOGLE_API_KEY=<你的 Google AI Studio API Key>
 LLM_PROVIDER=google
 PRIMARY_MODEL=gemma-3-12b-it
+AUTH_SECRET=<一段夠長的隨機字串>       # 固定後重啟不會把大家登出
+ADMIN_PASSWORD=<第一個管理者的密碼>     # 尚無管理者時，啟動會建立帳號 admin
 
 # 3. 建立向量索引（首次會下載嵌入模型）
 python -X utf8 scripts/index_vault.py --rebuild
 
-# 4. 啟動
+# 4. 啟動（本機遊玩可直接執行 start.ps1）
 cd backend && python -X utf8 -m uvicorn main:app --port 8000
 
 # 5. 瀏覽器開 http://localhost:8000
 ```
 
-### 測試帳號（首次啟動自動建立）
+### 示範帳號（只在 `DEMO_SEED=true` 時建立）
+
+`start.ps1` 會自動開啟 `DEMO_SEED`，供本機遊玩：
 
 | 帳號 | 密碼 | 角色 |
 |---|---|---|
@@ -73,15 +77,22 @@ cd backend && python -X utf8 -m uvicorn main:app --port 8000
 | R001 | research123 | 研究者 |
 | A001 | admin123 | 管理者 |
 
-> 正式環境請立即更換這些密碼。
+> **正式環境預設不建立任何預設帳號。** 第一個管理者由 `.env` 的 `ADMIN_PASSWORD` 建立，
+> 其餘帳號由管理者發放。
 
 ## 測試
 
 ```bash
 cd backend
-python -X utf8 test_phase1.py        # 地基單元測試（db/auth/redflag/quality），不需 API key
-python -X utf8 test_integration.py   # 整合測試（啟動/登入/紅旗/品質閘），不需 API key
+python -X utf8 test_security.py      # 資安回歸測試（對應資安審查各項）+ 前後端欄位契約
+python -X utf8 test_phase1.py        # 地基單元測試（db/auth/redflag/quality）
+python -X utf8 test_phase2.py        # 症狀追問
+python -X utf8 test_phase3.py        # 研究統計與匯出
+python -X utf8 test_quiz.py          # 知識測驗
+python -X utf8 test_integration.py   # 整合測試（啟動/登入/紅旗/品質閘）
 ```
+
+全部不需 API key，也不會呼叫外部 LLM。
 
 ## 換成 Claude Sonnet 5
 
@@ -99,7 +110,10 @@ PRIMARY_MODEL=claude-sonnet-5
 - **`.env` 不進版控**（`.gitignore` 已排除）。若曾外流過任何 API key，請立即至供應商後台撤銷重發。
 - **`chroma_db/`、`models/`、`data/*.sqlite3` 不進版控** —— 向量庫可由 `scripts/index_vault.py` 重建，
   嵌入模型另行下載，SQLite 含病患資料絕不上傳。
-- 認證目前為帳密 + 雜湊 + 簽章 token，足夠研究用；正式醫療環境建議升級 JWT/OAuth2。
+- **身分一律來自登入 token**（網頁）或 LINE 綁定，請求內容不能自報病患代號。
+  研究者頁、WebSocket 警示、匯出都需要研究者以上權限。
+- 送進 LLM 的內容不含病患真名；警示推播只用假名代號。
+- 完整資安審查與尚未處理的項目見 `Obsidian_Vault/專案管理/資安審查.md`。
 
 ## 藍圖
 

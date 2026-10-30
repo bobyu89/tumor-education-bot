@@ -4,6 +4,7 @@
 
 執行：cd backend && python -X utf8 test_integration.py
 """
+import testutil  # 必須最先（設定 DEMO_SEED）
 import sys
 import tempfile
 from pathlib import Path
@@ -35,9 +36,11 @@ with TestClient(main.app) as client:   # with 觸發 startup（init_db + seed）
     check("錯密碼 401", r.status_code == 401)
     r = client.post("/login", json={"account": "P001", "password": "patient123"})
     check("病患登入帶 patient_code", r.json().get("patient_code") == "P001")
+    P = testutil.login_headers(client, "P001", "patient123")
+    R = testutil.login_headers(client, "R001", "research123")
 
     print("\n=== 紅旗 /chat 短路（不呼叫 LLM）===")
-    r = client.post("/chat", json={"patient_id": "P001", "message": "我突然胸痛喘不過氣"})
+    r = client.post("/chat", json={"message": "我突然胸痛喘不過氣"}, headers=P)
     body = r.json()
     check("回應 200", r.status_code == 200)
     check("標記為 emergency", body["is_emergency"] is True)
@@ -45,7 +48,7 @@ with TestClient(main.app) as client:   # with 觸發 startup（init_db + seed）
     check("未走 RAG（sources 空）", body["sources"] == [])
 
     print("\n=== 紅旗事件已落庫 ===")
-    sess = client.get("/sessions").json()
+    sess = client.get("/sessions", headers=R).json()
     p001 = next((s for s in sess if s["patient_code"] == "P001"), None)
     check("P001 有 has_emergency", p001 and p001["has_emergency"] is True)
 
@@ -56,7 +59,7 @@ with TestClient(main.app) as client:   # with 觸發 startup（init_db + seed）
     _orig = rag.retriever.query
     rag.retriever.query = lambda *a, **k: []
     try:
-        r = client.post("/chat", json={"patient_id": "P001", "message": "化療期間可以做什麼運動"})
+        r = client.post("/chat", json={"message": "化療期間可以做什麼運動"}, headers=P)
         body = r.json()
         check("無來源被轉介（未呼叫 LLM、未編造）",
               "護理師" in body["response"] and body["sources"] == [])
