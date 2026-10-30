@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import logging
 
+import activity
 import auth
 import db
 import quiz
@@ -21,8 +22,8 @@ from chat_service import process_message
 from config import settings
 from models import ChatRequest, ChatResponse, LoginRequest, QuizSubmit
 from rag import retriever
-from security import (check_patient_code, patient_user, staff_from_ws_token,
-                      staff_user)
+from security import (admin_user, check_patient_code, patient_user,
+                      staff_from_ws_token, staff_user)
 from websocket_manager import manager
 
 app = FastAPI(
@@ -178,6 +179,22 @@ async def export_table(table: str, user: dict = Depends(staff_user)):
         content, media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{table}.csv"'},
     )
+
+
+# ── 活動 LOG ──────────────────────────────────────────────────────
+@app.get("/logs/patient/{patient_code}")
+async def patient_log(patient_code: str, user: dict = Depends(staff_user)):
+    """一位病患的完整活動時間軸（含誰看過他的資料）。查看本身也會被記錄。"""
+    check_patient_code(patient_code)
+    _audit(user, "view_activity_log", patient_code)
+    return {"patient_code": patient_code, "items": activity.patient_activity(patient_code)}
+
+
+@app.get("/logs/staff")
+async def staff_log(account: str | None = None, user: dict = Depends(admin_user)):
+    """研究者/管理者的操作紀錄，限管理者。"""
+    _audit(user, "view_staff_audit", account=account)
+    return {"account": account, "items": activity.staff_audit(account)}
 
 
 @app.websocket("/ws/nurse")

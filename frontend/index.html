@@ -354,6 +354,30 @@
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   }
   .r-patient-tag h3 { font-size: 16px; color: var(--primary); }
+  .r-patient-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .view-toggle { display: flex; gap: 2px; background: var(--surface-low); border-radius: var(--radius-full); padding: 3px; }
+  .view-btn {
+    border: 0; background: transparent; padding: 5px 12px; border-radius: var(--radius-full);
+    font: inherit; font-size: 12px; color: var(--on-surface-var); cursor: pointer;
+  }
+  .view-btn.active { background: var(--surface-lowest); color: var(--primary); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+
+  /* 活動 LOG：時間｜誰｜做了什麼。左邊色條區分類型 */
+  .log-item {
+    display: grid; grid-template-columns: 140px 72px 1fr; gap: 10px; align-items: baseline;
+    padding: 8px 12px; background: var(--surface-lowest); border-radius: 10px;
+    border-left: 3px solid var(--outline-var); font-size: 13px;
+  }
+  .log-item.alert   { border-left-color: var(--red-flag); }
+  .log-item.access  { border-left-color: var(--amber); }
+  .log-item.symptom, .log-item.quiz, .log-item.comprehension { border-left-color: var(--primary-light); }
+  .log-ts  { font-size: 11px; color: var(--outline); font-variant-numeric: tabular-nums; }
+  .log-who { font-size: 11px; color: var(--on-surface-var); }
+  .log-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--outline); padding: 0 2px 4px; }
+  .log-legend span::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+  .log-legend .lg-alert::before   { background: var(--red-flag); }
+  .log-legend .lg-access::before  { background: var(--amber); }
+  .log-legend .lg-symptom::before { background: var(--primary-light); }
   .tag-pill {
     background: var(--surface-low);
     border-radius: var(--radius-full);
@@ -595,6 +619,10 @@
       <div class="r-patient-tag">
         <h3 id="r-viewing">請從左側選擇病患</h3>
       </div>
+      <div class="view-toggle">
+        <button class="view-btn active" id="btn-view-chat" onclick="showConversation()">💬 對話</button>
+        <button class="view-btn" id="btn-view-log" onclick="showPatientLog()">📋 LOG</button>
+      </div>
     </div>
     <div class="r-alert-banner" id="r-alert-banner">
       <span class="alert-icon">⚠️</span>
@@ -658,6 +686,16 @@
       </div>
       <div style="font-size:11px;color:var(--outline);margin-top:6px;">
         匯出僅含假名代號（P001…），不含真實姓名。
+      </div>
+    </div>
+
+    <!-- ── 管理者專區（只有 admin 看得到）── -->
+    <div id="admin-panel" style="display:none;">
+      <div class="r-section">
+        <div class="r-section-title">人員存取稽核</div>
+        <div class="action-btns">
+          <button class="action-btn" onclick="showStaffAudit()">🛡️ 查看所有人員操作紀錄</button>
+        </div>
       </div>
     </div>
   </div>
@@ -846,9 +884,11 @@ async function login() {
       showScreen('chat-screen');
     } else {
       document.getElementById('r-code').textContent = currentCode;
+      document.getElementById('admin-panel').style.display = data.role === 'admin' ? 'block' : 'none';
       showScreen('researcher-screen');
       loadSessions();
       connectNurseWS();
+      if (data.role === 'admin' && typeof loadAdminPatients === 'function') loadAdminPatients();
     }
   } catch {
     showLoginError('無法連線伺服器，請稍後再試');
@@ -1014,6 +1054,7 @@ async function selectPatient(pid) {
   }
 
   // Load full history
+  setViewButtons('chat');
   try {
     const res = await apiFetch(`/history/${encodeURIComponent(pid)}`);
     const data = await res.json();
@@ -1076,6 +1117,71 @@ function renderFlagRecords(sessions) {
 }
 
 function refreshSessions() { loadSessions(); }
+
+// ── 活動 LOG ──
+function setViewButtons(view) {
+  document.getElementById('btn-view-chat').classList.toggle('active', view === 'chat');
+  document.getElementById('btn-view-log').classList.toggle('active', view === 'log');
+}
+
+async function showConversation() {
+  if (!selectedPatient) return;
+  setViewButtons('chat');
+  try {
+    const res = await apiFetch(`/history/${encodeURIComponent(selectedPatient)}`);
+    renderTimeline((await res.json()).messages);
+  } catch { renderTimeline([]); }
+}
+
+async function showPatientLog() {
+  if (!selectedPatient) { alert('請先從左側選擇病患'); return; }
+  setViewButtons('log');
+  const timeline = document.getElementById('r-timeline');
+  timeline.innerHTML = '<div class="no-session">載入中…</div>';
+  try {
+    const res = await apiFetch(`/logs/patient/${encodeURIComponent(selectedPatient)}`);
+    const data = await res.json();
+    renderLog(data.items, '此病患尚無活動紀錄');
+  } catch { timeline.innerHTML = '<div class="no-session">無法載入 LOG</div>'; }
+}
+
+async function showStaffAudit() {
+  setViewButtons('');
+  document.getElementById('r-viewing').textContent = '人員存取稽核（所有研究者／管理者）';
+  document.getElementById('r-alert-banner').classList.remove('show');
+  const timeline = document.getElementById('r-timeline');
+  timeline.innerHTML = '<div class="no-session">載入中…</div>';
+  try {
+    const res = await apiFetch('/logs/staff');
+    if (res.status === 403) { timeline.innerHTML = '<div class="no-session">僅管理者可查看</div>'; return; }
+    const data = await res.json();
+    const items = data.items.map(it => ({
+      ts: it.ts, who: it.actor,
+      summary: it.target ? `${it.action}：${it.target}` : it.action,
+      kind: it.event_type === 'login_failed' ? 'alert'
+          : (it.event_type.startsWith('view_') || it.event_type === 'export_csv') ? 'access' : 'event',
+    }));
+    renderLog(items, '尚無人員操作紀錄');
+  } catch { timeline.innerHTML = '<div class="no-session">無法載入稽核紀錄</div>'; }
+}
+
+function renderLog(items, emptyText) {
+  const timeline = document.getElementById('r-timeline');
+  if (!items.length) {
+    timeline.innerHTML = `<div class="no-session"><div class="no-session-icon">📋</div><div>${escHtml(emptyText)}</div></div>`;
+    return;
+  }
+  const legend = `<div class="log-legend">
+      <span class="lg-alert">紅旗／異常</span><span class="lg-access">有人查看資料</span>
+      <span class="lg-symptom">症狀／測驗</span><span>新的在上</span></div>`;
+  timeline.innerHTML = legend + items.map(it => `
+    <div class="log-item ${escHtml(it.kind)}">
+      <span class="log-ts">${escHtml(fmtTime(it.ts))}</span>
+      <span class="log-who">${escHtml(it.who)}</span>
+      <span>${escHtml(it.summary)}</span>
+    </div>`).join('');
+  timeline.scrollTop = 0;
+}
 
 function exportSession() {
   if (!selectedPatient) { alert('請先選擇病患'); return; }
