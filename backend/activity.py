@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import json
 
+from assessment import PROTOCOLS
 from db import get_conn
+
+_SYMPTOM_NAMES = {p.key: p.name for p in PROTOCOLS}   # diarrhea → 腹瀉（畫面用；CSV 匯出保留英文代碼）
 
 # events 中要放進病患時間軸的類型。redflag_high / quiz_submit / assessment_complete
 # 已由 alerts / quiz_results / symptom_scores 呈現，不重複列。
@@ -69,8 +72,9 @@ def patient_activity(patient_code: str, limit: int = 500) -> list[dict]:
             "SELECT esas_symptom, score, extra, ts FROM symptom_scores WHERE patient_code=?",
             (patient_code,)
         ):
+            name = _SYMPTOM_NAMES.get(r["esas_symptom"], r["esas_symptom"])
             items.append({"ts": r["ts"], "kind": "symptom", "who": "病患",
-                          "summary": f"症狀評估 {r['esas_symptom']} {r['score']}/10",
+                          "summary": f"症狀評估 {name} {r['score']}/10",
                           "detail": json.loads(r["extra"] or "{}")})
         for r in conn.execute(
             "SELECT onc_code, phase, score, ts FROM quiz_results WHERE patient_code=?",

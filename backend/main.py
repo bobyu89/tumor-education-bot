@@ -5,25 +5,29 @@ AI 腫瘤衛教機器人 FastAPI 主程式 —— 只放路由。
 - 病患訊息處理：chat_service.process_message（網頁與 LINE 共用）
 - 研究者每次查看病患資料都記入 events（actor = 帳號），供存取稽核
 """
-from fastapi import (Depends, FastAPI, HTTPException, Query, WebSocket,
-                     WebSocketDisconnect)
+from fastapi import (BackgroundTasks, Depends, FastAPI, HTTPException, Query,
+                     Request, WebSocket, WebSocketDisconnect)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
+import json
 import logging
+import secrets
 
 import activity
 import auth
+import binding
 import db
+import line_bot
 import quiz
 import stats
 from chat_service import process_message
 from config import settings
-from models import ChatRequest, ChatResponse, LoginRequest, QuizSubmit
+from models import ChatRequest, ChatResponse, LoginRequest, PatientCreate, QuizSubmit
 from rag import retriever
-from security import (admin_user, check_patient_code, patient_user,
-                      staff_from_ws_token, staff_user)
+from security import (admin_user, check_patient_code, is_valid_patient_code,
+                      patient_user, staff_from_ws_token, staff_user)
 from websocket_manager import manager
 
 app = FastAPI(
@@ -195,6 +199,66 @@ async def staff_log(account: str | None = None, user: dict = Depends(admin_user)
     """研究者/管理者的操作紀錄，限管理者。"""
     _audit(user, "view_staff_audit", account=account)
     return {"account": account, "items": activity.staff_audit(account)}
+
+
+# ── 管理者：病患與 LINE 通行碼 ────────────────────────────────────
+@app.get("/admin/patients")
+async def admin_list_patients(user: dict = Depends(admin_user)):
+    return binding.list_patients()
+
+
+@app.post("/admin/patients", status_code=201)
+async def admin_create_patient(req: PatientCreate, user: dict = Depends(admin_user)):
+    """建立病患。平台不收真名：代號與真人的對照由研究團隊另外保管（資料最小化）。
+    病患走 LINE，不需要網頁密碼，所以設一組隨機密碼。"""
+    if not is_valid_patient_code(req.pseudonym):
+        raise HTTPException(status_code=400, detail="代號格式需為 P 加 3–6 位數字，例如 P012")
+    if binding.patient_exists(req.pseudonym):
+        raise HTTPException(status_code=409, detail="此代號已存在")
+    auth.create_user(req.pseudonym, secrets.token_urlsafe(24), "patient",
+                     pseudonym=req.pseudonym, created_by=user["account"],
+                     cancer_type=req.cancer_type, age=req.age, gender=req.gender,
+                     education_level=req.education_level)
+    return {"pseudonym": req.pseudonym}
+
+
+@app.post("/admin/patients/{patient_code}/binding-code")
+async def admin_issue_code(patient_code: str, user: dict = Depends(admin_user)):
+    """發一組一次性通行碼。明碼只在這次回應出現，資料庫只存雜湊。"""
+    check_patient_code(patient_code)
+    try:
+        return binding.issue_code(patient_code, user["account"])
+    except LookupError:
+        raise HTTPException(status_code=404, detail="查無此病患")
+
+
+@app.delete("/admin/patients/{patient_code}/binding")
+async def admin_unbind(patient_code: str, user: dict = Depends(admin_user)):
+    check_patient_code(patient_code)
+    if not binding.unbind(patient_code, user["account"]):
+        raise HTTPException(status_code=404, detail="此病患目前沒有綁定 LINE")
+    return {"unbound": patient_code}
+
+
+# ── LINE webhook（病患端）─────────────────────────────────────────
+@app.post("/line/webhook")
+async def line_webhook(request: Request, background: BackgroundTasks):
+    """立刻回 200，事件交給背景處理（LINE 要求快速回應，LLM 回答則可能要數十秒）。"""
+    if not line_bot.enabled():
+        raise HTTPException(status_code=404)     # 未設定 LINE 金鑰時當作不存在
+    body = await request.body()
+    if not line_bot.verify_signature(body, request.headers.get("X-Line-Signature", "")):
+        raise HTTPException(status_code=400, detail="invalid signature")
+    try:
+        events = json.loads(body).get("events", [])
+    except (json.JSONDecodeError, AttributeError):
+        raise HTTPException(status_code=400, detail="invalid body")
+    for event in events:
+        event_id = event.get("webhookEventId")
+        if event_id and not line_bot.first_seen(event_id):
+            continue                              # LINE 重送的事件，已處理過
+        background.add_task(line_bot.handle_event, event)
+    return {"status": "ok"}
 
 
 @app.websocket("/ws/nurse")

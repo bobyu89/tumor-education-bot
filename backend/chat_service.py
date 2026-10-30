@@ -122,7 +122,7 @@ async def _escalate(pid: str, ar, msg_id: int, channel: Channel) -> ChatResponse
         "keywords": [ar.symptom], "via": "assessment",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
-    db.add_alert(pid, f"{ar.symptom}:{ar.score}", ar.escalate_level, msg_id,
+    db.add_alert(pid, f"{_sym_name(ar.symptom)} {ar.score}/10", ar.escalate_level, msg_id,
                  notified_channels=["websocket"])
     reply = _escalation_reply(channel, _sym_name(ar.symptom), ar.score) or ar.reply
     db.add_message(pid, "bot", reply, answer_quality="assessment_escalated")

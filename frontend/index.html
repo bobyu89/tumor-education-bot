@@ -378,6 +378,33 @@
   .log-legend .lg-alert::before   { background: var(--red-flag); }
   .log-legend .lg-access::before  { background: var(--amber); }
   .log-legend .lg-symptom::before { background: var(--primary-light); }
+
+  /* 管理者：病患與 LINE 綁定 */
+  .adm-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    padding: 7px 0; border-bottom: 1px solid var(--surface-high); color: var(--on-surface);
+  }
+  .adm-row .adm-meta { font-size: 11px; color: var(--outline); }
+  .adm-actions { display: flex; gap: 4px; flex-shrink: 0; }
+  .adm-btn {
+    border: 1px solid var(--outline-var); background: var(--surface-lowest); border-radius: 6px;
+    padding: 3px 7px; font: inherit; font-size: 11px; color: var(--primary); cursor: pointer;
+  }
+  .adm-btn.warn { color: var(--red-flag); }
+  .code-box {
+    margin-bottom: 10px; padding: 12px; border-radius: 10px; text-align: center;
+    background: var(--surface-low); border: 1px dashed var(--primary);
+  }
+  .code-box .code { font-family: ui-monospace, Consolas, monospace; font-size: 24px; font-weight: 700;
+                    letter-spacing: 3px; color: var(--primary); user-select: all; }
+  .code-box .code-hint { font-size: 11px; color: var(--on-surface-var); margin-top: 4px; }
+  .admin-form { margin-top: 10px; font-size: 12px; }
+  .admin-form summary { cursor: pointer; color: var(--primary); }
+  .admin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+  .admin-grid input, .admin-grid select {
+    padding: 6px 8px; border: 1px solid var(--outline-var); border-radius: 6px; font: inherit; font-size: 12px;
+  }
+  .admin-note { font-size: 11px; color: var(--outline); margin-top: 6px; }
   .tag-pill {
     background: var(--surface-low);
     border-radius: var(--radius-full);
@@ -691,6 +718,28 @@
 
     <!-- ── 管理者專區（只有 admin 看得到）── -->
     <div id="admin-panel" style="display:none;">
+      <div class="r-section">
+        <div class="r-section-title">病患與 LINE 綁定</div>
+        <div id="code-box" class="code-box" style="display:none;"></div>
+        <div id="admin-patients" style="font-size:12px;color:var(--outline);">載入中…</div>
+        <details class="admin-form">
+          <summary>＋ 新增病患</summary>
+          <div class="admin-grid">
+            <input id="np-code" placeholder="代號 P012" maxlength="7">
+            <input id="np-cancer" placeholder="癌別">
+            <input id="np-age" type="number" min="0" max="120" placeholder="年齡">
+            <select id="np-gender"><option value="">性別</option><option>男</option><option>女</option><option>其他</option></select>
+            <select id="np-edu">
+              <option value="general">一般說明</option>
+              <option value="simple">淺白說明</option>
+              <option value="detailed">詳細說明</option>
+            </select>
+            <button class="action-btn" onclick="createPatient()">建立</button>
+          </div>
+          <div class="admin-note">平台不收真名。代號與真人的對照請由研究團隊另行保管。</div>
+        </details>
+      </div>
+
       <div class="r-section">
         <div class="r-section-title">人員存取稽核</div>
         <div class="action-btns">
@@ -1163,6 +1212,69 @@ async function showStaffAudit() {
     }));
     renderLog(items, '尚無人員操作紀錄');
   } catch { timeline.innerHTML = '<div class="no-session">無法載入稽核紀錄</div>'; }
+}
+
+// ── 管理者：病患與 LINE 通行碼 ──
+async function loadAdminPatients() {
+  const box = document.getElementById('admin-patients');
+  try {
+    const list = await (await apiFetch('/admin/patients')).json();
+    if (!list.length) { box.textContent = '尚無病患，請先新增'; return; }
+    box.innerHTML = list.map(p => {
+      const status = p.bound_at ? '🟢 已綁定 LINE'
+                   : p.pending_code_expires_at ? '🟡 已發碼，待病患輸入' : '⚪ 未綁定';
+      const meta = [p.cancer_type, p.age && `${p.age} 歲`, p.gender].filter(Boolean).join('・');
+      return `<div class="adm-row">
+          <div><b>${escHtml(p.pseudonym)}</b> <span class="adm-meta">${escHtml(meta)}</span>
+               <div class="adm-meta">${status}</div></div>
+          <div class="adm-actions">
+            <button class="adm-btn" data-code="${escHtml(p.pseudonym)}" onclick="issueCode(this.dataset.code)">
+              ${p.bound_at ? '重發碼' : '發通行碼'}</button>
+            ${p.bound_at ? `<button class="adm-btn warn" data-code="${escHtml(p.pseudonym)}"
+                onclick="unbindLine(this.dataset.code)">解除</button>` : ''}
+          </div></div>`;
+    }).join('');
+  } catch { box.textContent = '無法載入病患清單'; }
+}
+
+async function issueCode(code) {
+  if (!confirm(`要為 ${code} 發出新的 LINE 通行碼嗎？\n先前未使用的通行碼會失效。`)) return;
+  const res = await apiFetch(`/admin/patients/${encodeURIComponent(code)}/binding-code`, { method: 'POST' });
+  if (!res.ok) { alert('發碼失敗'); return; }
+  const d = await res.json();
+  const box = document.getElementById('code-box');
+  box.innerHTML = `<div class="code-hint">${escHtml(d.patient_code)} 的 LINE 通行碼</div>
+      <div class="code">${escHtml(d.code)}</div>
+      <div class="code-hint">只顯示這一次，請交給病患。有效至 ${escHtml(fmtTime(d.expires_at))}，限用一次。<br>
+      病患加入官方帳號後，在聊天室輸入此碼即完成綁定。</div>`;
+  box.style.display = 'block';
+  loadAdminPatients();
+}
+
+async function unbindLine(code) {
+  if (!confirm(`確定解除 ${code} 的 LINE 綁定？\n解除後該 LINE 帳號將無法再以此病患身分對話，需重新發碼。`)) return;
+  const res = await apiFetch(`/admin/patients/${encodeURIComponent(code)}/binding`, { method: 'DELETE' });
+  if (!res.ok) { alert('解除失敗'); return; }
+  loadAdminPatients();
+}
+
+async function createPatient() {
+  const val = id => document.getElementById(id).value.trim();
+  const body = {
+    pseudonym: val('np-code').toUpperCase(),
+    cancer_type: val('np-cancer') || null,
+    age: val('np-age') ? Number(val('np-age')) : null,
+    gender: val('np-gender') || null,
+    education_level: val('np-edu'),
+  };
+  const res = await apiFetch('/admin/patients', { method: 'POST', body: JSON.stringify(body) });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert(err.detail || '建立失敗');
+    return;
+  }
+  ['np-code', 'np-cancer', 'np-age'].forEach(id => document.getElementById(id).value = '');
+  loadAdminPatients();
 }
 
 function renderLog(items, emptyText) {

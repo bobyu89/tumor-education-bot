@@ -94,6 +94,42 @@ python -X utf8 test_integration.py   # 整合測試（啟動/登入/紅旗/品�
 
 全部不需 API key，也不會呼叫外部 LLM。
 
+## LINE 病患端
+
+架構：**病患用 LINE**，研究者與管理者用網頁。兩個管道共用同一條處理流程（紅旗 → 症狀追問 → RAG）。
+
+### 綁定流程
+
+1. 管理者在網頁「管理者專區 → 病患與 LINE 綁定」新增病患（只填代號與研究變項，**不收真名**）
+2. 按「發通行碼」→ 畫面顯示 8 碼通行碼（如 `K7RM-4QXP`），**只顯示一次**，交給病患
+3. 病患加入 LINE 官方帳號，在聊天室輸入通行碼 → 綁定完成，之後直接對話
+
+通行碼 72 小時有效、限用一次；同一 LINE 帳號 15 分鐘內輸錯 5 次會暫時鎖定。
+
+### 啟用
+
+```bash
+# .env
+LINE_CHANNEL_SECRET=<LINE Developers → Basic settings>
+LINE_CHANNEL_ACCESS_TOKEN=<LINE Developers → Messaging API → Issue>
+EMERGENCY_CONTACT=請立即撥打 119，或聯絡血液腫瘤科 (02) 8792-7056   # 請與醫院確認
+```
+
+Webhook URL 填 `https://<你的網域>/line/webhook`（LINE 只接受 HTTPS）。兩個金鑰都沒設時，
+這個端點會回 404，等同不存在。
+
+- 居家病患沒有呼叫鈴，LINE 管道的緊急回覆改為撥打電話，且不承諾「護理師會回覆」
+- 衛教回覆以 Flex 訊息送出，手機通知預覽只顯示「您有一則新的衛教回覆」，不露出症狀
+- 尚未綁定的人若傳來急症訊息，仍會先給緊急指引
+
+## 每人活動 LOG
+
+- **病患 LOG**（研究者、管理者）：研究者頁選病患 → 「📋 LOG」。對話、紅旗、症狀分數、測驗、
+  LINE 綁定，以及**誰在何時看過他的資料**
+- **人員稽核**（僅管理者）：每位研究者／管理者的登入、登入失敗、查看了誰、匯出了什麼、發了哪些通行碼
+
+查看 LOG 這個動作本身也會被記錄。
+
 ## 換成 Claude Sonnet 5
 
 ```bash
@@ -121,6 +157,7 @@ PRIMARY_MODEL=claude-sonnet-5
 - **Phase 2**：ESAS-r 症狀結構化追問 → 分級升級紅旗 ✅
 - **Phase 3a**：研究統計 + 去識別化 CSV 匯出（研究者專屬）✅
 - **Phase 3b（本版）**：知識測驗前後測（`backend/quiz.py`）✅
+- **資安與 LINE**：身分貫穿全系統、每人 LOG、LINE 通行碼綁定 ✅
 - **Phase 3c**：主動定時回報、Telegram 主持人通知（需先申請 bot token）
 
 ### Phase 3b：知識測驗（`backend/quiz.py`）
