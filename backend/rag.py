@@ -30,17 +30,22 @@ class RAGRetriever:
             )
 
     def query(self, query_text: str, n_results: int = None,
-              category_filter: str = None) -> list[dict]:
+              category_filter: str = None, code_filter: str = None) -> list[dict]:
+        """語意檢索。code_filter（如 "ONC-22"）可把檢索限制在單一衛教單張，
+        供症狀評估後的衛教使用：症狀 → 對應單張是確定的，不該靠語意猜。"""
         k = n_results or settings.RAG_TOP_K
         total = self.collection.count()
         if total == 0:
             return []
 
         k = min(k, total)
-        # 新舊 metadata 皆支援分類過濾
-        where = None
+        # 新舊 metadata 皆支援分類過濾；code 只有新 index（index_vault.py）才有
+        conds = []
         if category_filter:
-            where = {"category": category_filter}
+            conds.append({"category": category_filter})
+        if code_filter:
+            conds.append({"code": code_filter})
+        where = conds[0] if len(conds) == 1 else ({"$and": conds} if conds else None)
 
         results = self.collection.query(
             query_texts=[query_text],
@@ -56,10 +61,15 @@ class RAGRetriever:
             results["distances"][0],
         ):
             if dist < 0.8:   # cosine distance < 0.8 = 相關
+                code = meta.get("code", "")
+                # 顯示用來源標籤：新 index 用「ONC-17 口腔黏膜炎」（frontmatter 的 source 是發行單位，
+                # 13 份全相同，不能拿來當來源標籤）；舊 index 退回 source_file。
+                label = (f"{code} {meta.get('topic', '')}".strip() if code
+                         else meta.get("source") or meta.get("source_file", "unknown"))
                 output.append({
                     "content": doc,
-                    # 新 index：source / code / category / section；舊 index：source_file / disease_category
-                    "source": meta.get("source") or meta.get("source_file", "unknown"),
+                    "source": label,
+                    "publisher": meta.get("source", ""),
                     "code": meta.get("code", ""),
                     "section": meta.get("section", ""),
                     "category": meta.get("category") or meta.get("disease_category", ""),

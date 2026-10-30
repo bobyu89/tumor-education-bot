@@ -93,7 +93,8 @@ async def process_message(pid: str, text: str, channel: Channel = "web") -> Chat
         if ar.educate:
             lead = (f"了解了，您的「{_sym_name(ar.symptom)}」嚴重度是 {ar.score}/10。"
                     "以下提供一些照護建議：\n\n")
-            return await _rag_answer(pid, _edu_query(ar), flag, msg_id, channel, lead=lead)
+            return await _rag_answer(pid, _edu_query(ar), flag, msg_id, channel, lead=lead,
+                                     code=ar.onc_code)
         return _assess_reply(pid, ar, flag)          # 病患中止評估
     proto = assessment.detect_symptom(text)
     if proto is not None:
@@ -140,10 +141,11 @@ def _edu_query(ar) -> str:
 
 
 async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Channel,
-                      *, lead: str = "") -> ChatResponse:
-    """RAG → 品質前置 → LLM → 品質標記 → 落庫。一般問答與評估後衛教共用。"""
+                      *, lead: str = "", code: str | None = None) -> ChatResponse:
+    """RAG → 品質前置 → LLM → 品質標記 → 落庫。一般問答與評估後衛教共用。
+    code：限制檢索在單一衛教單張（評估後衛教用，症狀→單張對應是確定的，不該靠語意猜）。"""
     profile = load_profile(pid)
-    rag_docs = retriever.query(query_text)
+    rag_docs = retriever.query(query_text, code_filter=code)
     sources = [d["source"] for d in rag_docs]
 
     if not quality.pre_check(rag_docs):

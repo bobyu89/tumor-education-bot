@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>腫瘤化療衛教機器人 · 靜態演示</title>
+<meta name="description" content="RAG 化療衛教機器人的瀏覽器內演示：紅旗攔截、ESAS-r 症狀追問、有來源的衛教回覆、護理站即時警示。無後端、無 LLM。">
+<style>
+  :root {
+    --primary: #006b5f; --primary-light: #4cb7a7; --mint: #e8f5f3; --secondary-container: #8bf1e6;
+    --surface: #f4f6f6; --surface-lowest: #fff; --surface-high: #e6e8e8; --on-surface: #191c1d;
+    --on-surface-var: #3d4947; --outline: #6d7a77; --outline-var: #bdc9c6;
+    --red-flag: #b71c1c; --red-bg: #fdecea; --amber: #e65100; --amber-bg: #fff3e0;
+    --bubble-patient: #d7f5ee; --bubble-bot: #fff; --chat-bg: #eef2f1;
+    --radius: 14px; --shadow: 0 1px 2px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.06);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--surface); color: var(--on-surface);
+    font: 15px/1.55 -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif; }
+  a { color: var(--primary); }
+  header { background: var(--primary); color: #fff; padding: 14px 20px; display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header .badge { font-size: 12px; background: rgba(255,255,255,.18); padding: 3px 10px; border-radius: 999px; }
+  header nav { margin-left: auto; display: flex; gap: 14px; font-size: 13px; }
+  header nav a { color: #fff; text-decoration: none; opacity: .9; }
+  header nav a:hover { opacity: 1; text-decoration: underline; }
+  .intro { max-width: 1240px; margin: 14px auto 0; padding: 0 16px; font-size: 13px; color: var(--on-surface-var); }
+  .intro b { color: var(--on-surface); }
+  main { max-width: 1240px; margin: 12px auto 40px; padding: 0 16px; display: grid; grid-template-columns: 400px 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } .phone { max-width: 100%; } }
+
+  /* ── 病患手機 ── */
+  .phone { background: var(--surface-lowest); border-radius: 26px; box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; height: min(760px, calc(100vh - 150px)); min-height: 560px; border: 6px solid #22302e; }
+  .phone-top { background: var(--primary); color: #fff; padding: 10px 12px; display: flex; align-items: center; gap: 8px; }
+  .phone-top .who { flex: 1; min-width: 0; }
+  .phone-top select { width: 100%; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 8px; border: none; background: rgba(255,255,255,.95); color: var(--on-surface); }
+  .phone-top .sub { font-size: 11px; opacity: .85; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .icon-btn { background: rgba(255,255,255,.18); border: none; color: #fff; font-size: 16px; width: 34px; height: 34px; border-radius: 10px; cursor: pointer; }
+  .icon-btn:hover { background: rgba(255,255,255,.3); }
+  .chat { flex: 1; overflow-y: auto; background: var(--chat-bg); padding: 12px 10px; display: flex; flex-direction: column; gap: 8px; }
+  .msg { max-width: 88%; padding: 9px 12px; border-radius: 16px; white-space: pre-wrap; word-break: break-word; font-size: 14px; box-shadow: 0 1px 1px rgba(0,0,0,.05); animation: pop .18s ease-out; }
+  @keyframes pop { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .msg.patient { align-self: flex-end; background: var(--bubble-patient); border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: var(--bubble-bot); border-bottom-left-radius: 4px; }
+  .msg.bot.emergency { border: 2px solid var(--red-flag); background: var(--red-bg); }
+  .msg .time { font-size: 10px; color: var(--outline); margin-top: 4px; text-align: right; }
+  .sources { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .chip { font-size: 11px; background: var(--mint); color: var(--primary); border: 1px solid var(--outline-var); padding: 2px 8px; border-radius: 999px; }
+  details.trace { margin-top: 6px; font-size: 11px; color: var(--on-surface-var); }
+  details.trace summary { cursor: pointer; color: var(--primary); user-select: none; }
+  details.trace ol { margin: 4px 0 0; padding-left: 18px; }
+  details.trace li { margin: 2px 0; }
+  .banner { display: none; background: var(--red-flag); color: #fff; font-size: 13px; padding: 8px 12px; }
+  .banner.on { display: block; animation: blink 1s ease-in-out 3; }
+  @keyframes blink { 50% { opacity: .55; } }
+  .quick { display: flex; gap: 6px; overflow-x: auto; padding: 8px 10px 4px; background: var(--surface-lowest); scrollbar-width: thin; }
+  .quick button { flex: none; font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--primary-light); background: #fff; color: var(--primary); cursor: pointer; white-space: nowrap; }
+  .quick button:hover { background: var(--mint); }
+  .quick button.step { border-style: dashed; color: var(--on-surface-var); }
+  .compose { display: flex; gap: 8px; padding: 8px 10px 12px; background: var(--surface-lowest); }
+  .compose input { flex: 1; font: inherit; padding: 9px 12px; border-radius: 999px; border: 1px solid var(--outline-var); outline: none; }
+  .compose input:focus { border-color: var(--primary); }
+  .compose button { font: inherit; padding: 0 16px; border-radius: 999px; border: none; background: var(--primary); color: #fff; cursor: pointer; }
+
+  /* ── 護理站儀表板 ── */
+  .dash { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .card { background: var(--surface-lowest); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 16px; min-width: 0; }
+  .card h2 { font-size: 14px; margin: 0 0 10px; color: var(--primary); display: flex; align-items: center; gap: 8px; }
+  .card h2 .n { margin-left: auto; font-size: 12px; color: var(--outline); font-weight: 400; }
+  .card.wide { grid-column: 1 / -1; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--surface-high); vertical-align: top; }
+  th { color: var(--outline); font-weight: 500; font-size: 12px; }
+  td.mono, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .alerts { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; }
+  .alerts li { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; padding: 7px 10px; border-radius: 10px; margin-bottom: 6px; font-size: 13px; }
+  .alerts li.high { background: var(--red-bg); border-left: 4px solid var(--red-flag); }
+  .alerts li.medium { background: var(--amber-bg); border-left: 4px solid var(--amber); }
+  .alerts li.new { animation: flash 1.2s ease-out 2; }
+  @keyframes flash { 0% { box-shadow: 0 0 0 3px rgba(183,28,28,.5); } 100% { box-shadow: none; } }
+  .lvl { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 6px; color: #fff; }
+  .lvl.high { background: var(--red-flag); } .lvl.medium { background: var(--amber); }
+  .alerts .meta { font-size: 11px; color: var(--outline); white-space: nowrap; }
+  .empty { color: var(--outline); font-size: 13px; }
+  .bar { display: inline-block; height: 8px; background: var(--primary-light); border-radius: 4px; vertical-align: middle; margin-right: 6px; }
+  .series span { display: inline-block; min-width: 22px; text-align: center; padding: 1px 4px; border-radius: 6px; background: var(--mint); margin-right: 3px; font-size: 12px; }
+  .series span.sev { background: var(--amber-bg); color: var(--amber); font-weight: 600; }
+  .qual { display: flex; flex-wrap: wrap; gap: 6px; }
+  .qual div { font-size: 12px; padding: 4px 10px; border-radius: 8px; background: var(--mint); }
+  .qual div b { display: block; font-size: 16px; color: var(--primary); }
+  .events { list-style: none; margin: 0; padding: 0; font-size: 12px; max-height: 200px; overflow-y: auto; }
+  .events li { padding: 3px 0; border-bottom: 1px dashed var(--surface-high); color: var(--on-surface-var); }
+  .events li .t { color: var(--outline); margin-right: 6px; }
+  .legend { font-size: 12px; color: var(--outline); margin-top: 8px; }
+
+  /* ── 測驗 ── */
+  .overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 50; overflow: auto; padding: 20px 12px; }
+  .overlay.on { display: block; }
+  .modal { background: #fff; max-width: 560px; margin: 0 auto; border-radius: 16px; padding: 18px 20px; }
+  .modal h3 { margin: 0 0 8px; color: var(--primary); font-size: 16px; }
+  .modal .row { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .modal select, .modal button { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--outline-var); background: #fff; }
+  .modal button.primary { background: var(--primary); color: #fff; border-color: var(--primary); cursor: pointer; }
+  .q { margin: 10px 0; padding: 10px; border-radius: 10px; background: var(--surface); font-size: 14px; }
+  .q label { display: block; margin: 3px 0 0 6px; font-size: 13px; cursor: pointer; }
+  .q.ok { border-left: 4px solid var(--primary-light); } .q.bad { border-left: 4px solid var(--red-flag); }
+  .seg button.on { background: var(--mint); border-color: var(--primary); color: var(--primary); }
+  footer { text-align: center; font-size: 12px; color: var(--outline); padding: 0 16px 30px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>腫瘤化療衛教機器人</h1>
+  <span class="badge">靜態演示 · 全部在瀏覽器內執行，無後端、無 LLM、不上傳任何資料</span>
+  <nav>
+    <a href="https://github.com/bobyu89/tumor-education-bot" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/bobyu89/tumor-education-bot/blob/main/docs/demo/%E6%BC%94%E7%A4%BA%E8%85%B3%E6%9C%AC.md" target="_blank" rel="noopener">演示腳本</a>
+  </nav>
+</header>
+<p class="intro">左邊是<b>病患端</b>（未來會是 LINE 官方帳號），右邊是<b>護理站／研究者儀表板</b>。
+  照著快速鍵 <b>S1 → S7</b> 點一遍，右側會即時反應。每則回覆下方可展開「處理軌跡」，看訊息經過了哪些關卡。
+  病患皆為虛構；紅旗、症狀追問、檢索與品質閘的規則與後端一致，只有「生成」改成從衛教單張章節規則組裝（正式版由 LLM 改寫）。</p>
+
+<main>
+  <section class="phone" aria-label="病患端">
+    <div class="phone-top">
+      <div class="who">
+        <select id="patient" aria-label="選擇模擬病患"></select>
+        <div class="sub" id="patient-sub"></div>
+      </div>
+      <button class="icon-btn" id="btn-quiz" title="知識測驗">📝</button>
+      <button class="icon-btn" id="btn-reset" title="重設這位病患的對話">↺</button>
+    </div>
+    <div class="banner" id="banner">🚨 偵測到緊急狀況，護理站已收到通知。</div>
+    <div class="chat" id="chat"></div>
+    <div class="quick" id="quick"></div>
+    <form class="compose" id="compose">
+      <input id="input" placeholder="輸入訊息…" autocomplete="off" maxlength="200">
+      <button type="submit">送出</button>
+    </form>
+  </section>
+
+  <section class="dash" aria-label="護理站儀表板">
+    <div class="card">
+      <h2>🚨 即時警示 <span class="n" id="alert-count"></span></h2>
+      <ul class="alerts" id="alerts"></ul>
+      <div class="legend">HIGH：紅旗關鍵字，未經 LLM 即推播。MEDIUM：症狀評估達門檻或中度關鍵字。</div>
+    </div>
+    <div class="card">
+      <h2>👥 病患總覽</h2>
+      <table><thead><tr><th>代號</th><th>模擬病患</th><th>訊息</th><th>紅旗</th><th>最後一句</th></tr></thead><tbody id="patients"></tbody></table>
+    </div>
+    <div class="card">
+      <h2>📈 症狀分數（ESAS-r 0–10）</h2>
+      <table><thead><tr><th>病患</th><th>症狀</th><th>歷次</th></tr></thead><tbody id="scores"></tbody></table>
+      <div class="legend">橘色＝≥7 分（嚴重）。序列由舊到新，供研究趨勢分析。</div>
+    </div>
+    <div class="card">
+      <h2>🧪 回答品質分布</h2>
+      <div class="qual" id="quality"></div>
+      <div class="legend">grounded 有來源作答；deflected 無來源轉介；redflag_shortcut 紅旗短路；assessment 評估對話。</div>
+    </div>
+    <div class="card">
+      <h2>📝 知識測驗前後測</h2>
+      <table><thead><tr><th>主題</th><th>前測平均</th><th>後測平均</th><th>n</th></tr></thead><tbody id="quiz-stats"></tbody></table>
+    </div>
+    <div class="card">
+      <h2>🗒 稽核事件 <span class="n">只增不改</span></h2>
+      <ul class="events" id="events"></ul>
+    </div>
+  </section>
+</main>
+<footer>知識庫：三軍總醫院護理部血液腫瘤科 13 份化療衛教單張（ONC-17…40）。本頁僅供教學演示，不做診斷、不建議劑量。</footer>
+
+<div class="overlay" id="quiz-overlay">
+  <div class="modal">
+    <h3>知識測驗</h3>
+    <div class="row">
+      <select id="quiz-topic"></select>
+      <span class="seg"><button id="ph-pre" class="on">前測 pre</button><button id="ph-post">後測 post</button></span>
+      <button id="quiz-close" style="margin-left:auto">關閉</button>
+    </div>
+    <div id="quiz-body"></div>
+    <div class="row" style="margin-top:12px"><button class="primary" id="quiz-submit">提交作答</button><span id="quiz-result"></span></div>
+  </div>
+</div>
+
+<script src="demo_data.js"></script>
+<script src="demo_engine.js"></script>
+<script>
+(function () {
+  'use strict';
+  var D = window.DEMO_DATA, E = window.DemoEngine;
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
+  var fmt = function (iso) { var d = new Date(iso); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  var ago = function (days, h) { var d = new Date(); d.setDate(d.getDate() - days); d.setHours(h || 10, 0, 0, 0); return d.toISOString(); };
+  var SYM = {}; E.PROTOCOLS.forEach(function (p) { SYM[p.key] = p.name; });
+  var QUALITY_ORDER = ['grounded', 'assessment', 'assessment_escalated', 'deflected_no_source', 'deflected_off_source', 'redflag_shortcut'];
+
+  var SCENARIOS = [
+    { label: 'S1 掉頭髮會長回來嗎', text: '化療後掉頭髮會長回來嗎' },
+    { label: 'S2 我一直拉肚子', text: '我一直拉肚子' }, { label: '↳ 3分', text: '3分', step: 1 }, { label: '↳ 一天四次', text: '一天四次', step: 1 },
+    { label: 'S3 打完針一直想吐', text: '打完針之後一直想吐' }, { label: '↳ 8', text: '8', step: 1 }, { label: '↳ 吐了六次', text: '吐了六次', step: 1 },
+    { label: 'S4 胸痛喘不過氣', text: '我現在胸痛而且喘不過氣' },
+    { label: 'S5 沒有胸痛（否定）', text: '醫師說如果胸痛要回診，我現在沒有胸痛，平常要注意什麼' },
+    { label: 'S6 撐不下去', text: '最近每天都好累，覺得撐不下去了' },
+    { label: 'S7 停車場在哪裡', text: '請問醫院的停車場在哪裡' },
+    { label: '白血球低要注意什麼', text: '白血球低要注意什麼' },
+    { label: '先不用（中止評估）', text: '先不用', step: 1 }
+  ];
+
+  // ── 狀態 ──
+  var sessions = {}, current = null, seenAlerts = 0;
+  function seedSession(p) {
+    var s = E.createSession(p);
+    s.seedMessages = D.seed.messages[p.code] || 0;
+    s.seedLast = D.seed.lastMessage[p.code] || '';
+    D.seed.scores.filter(function (x) { return x.code === p.code; }).forEach(function (x) {
+      s.scores.push({ ts: ago(x.daysAgo), symptom: x.symptom, name: SYM[x.symptom] || x.symptom, score: x.score, extra: x.extra, seeded: true });
+    });
+    D.seed.alerts.filter(function (x) { return x.code === p.code; }).forEach(function (x) {
+      s.alerts.push({ ts: ago(x.daysAgo, x.level === 'high' ? 6 : 14), level: x.level, trigger: x.trigger, type: x.level === 'high' ? 'EMERGENCY_ALERT' : 'SYMPTOM_ALERT', ack: x.ack, seeded: true });
+    });
+    D.seed.quiz.filter(function (x) { return x.code === p.code; }).forEach(function (x) {
+      s.quiz.push({ ts: ago(3), onc: x.onc, phase: x.phase, score: x.score, total: 6, seeded: true });
+    });
+    return s;
+  }
+  function resetAll() {
+    sessions = {};
+    D.patients.forEach(function (p) { sessions[p.code] = seedSession(p); });
+    seenAlerts = allAlerts().length;
+  }
+  function allAlerts() {
+    var out = [];
+    Object.keys(sessions).forEach(function (c) { sessions[c].alerts.forEach(function (a) { out.push(Object.assign({ code: c }, a)); }); });
+    out.sort(function (a, b) { return a.ts < b.ts ? 1 : -1; });
+    return out;
+  }
+
+  // ── 病患端 ──
+  function selectPatient(code) {
+    current = sessions[code];
+    var p = current.patient;
+    $('patient-sub').textContent = p.age + ' 歲 · ' + p.cancer + ' · ' + p.meds.join('+') + ' · ' + p.note;
+    renderChat();
+  }
+  function renderChat() {
+    var box = $('chat'); box.innerHTML = '';
+    if (!current.messages.length) {
+      var w = document.createElement('div'); w.className = 'msg bot';
+      w.textContent = current.patient.name.replace('（模擬）', '') + '您好，我是衛教小幫手。化療期間有任何不舒服或想了解的，都可以問我。若有緊急狀況請直接按呼叫鈴。';
+      box.appendChild(w);
+    }
+    current.messages.forEach(function (m) { box.appendChild(bubble(m)); });
+    box.scrollTop = box.scrollHeight;
+  }
+  function bubble(m) {
+    var el = document.createElement('div');
+    el.className = 'msg ' + m.role + (m.resp && m.resp.emergency ? ' emergency' : '');
+    var txt = document.createElement('div'); txt.textContent = m.text; el.appendChild(txt);
+    if (m.resp) {
+      if (m.resp.sources.length) {
+        var sc = document.createElement('div'); sc.className = 'sources';
+        m.resp.sources.forEach(function (s) { var c = document.createElement('span'); c.className = 'chip'; c.textContent = '📚 ' + s; sc.appendChild(c); });
+        el.appendChild(sc);
+      }
+      var det = document.createElement('details'); det.className = 'trace';
+      det.innerHTML = '<summary>處理軌跡 · 品質標記 ' + esc(m.resp.quality) + '</summary><ol>' +
+        m.resp.trace.map(function (t) { return '<li><b>' + esc(t.step) + '</b>：' + esc(t.result) + '</li>'; }).join('') + '</ol>';
+      el.appendChild(det);
+    }
+    var t = document.createElement('div'); t.className = 'time'; t.textContent = fmt(m.ts); el.appendChild(t);
+    return el;
+  }
+  function send(text) {
+    text = (text || '').trim();
+    if (!text || !current) return;
+    var r = E.chat(current, text, D);
+    renderChat();
+    var b = $('banner');
+    if (r.emergency) { b.className = 'banner'; void b.offsetWidth; b.className = 'banner on'; setTimeout(function () { b.className = 'banner'; }, 6000); }
+    renderDash();
+  }
+
+  // ── 儀表板 ──
+  function renderDash() {
+    var alerts = allAlerts();
+    $('alert-count').textContent = alerts.filter(function (a) { return a.level === 'high'; }).length + ' HIGH · ' + alerts.filter(function (a) { return a.level === 'medium'; }).length + ' MEDIUM';
+    var ul = $('alerts'); ul.innerHTML = '';
+    if (!alerts.length) ul.innerHTML = '<li class="empty">尚無警示</li>';
+    alerts.slice(0, 12).forEach(function (a, i) {
+      var li = document.createElement('li'); li.className = a.level + (i < alerts.length - seenAlerts ? ' new' : '');
+      var trig = a.trigger.replace(/^(\w+):(\d+)$/, function (_, k, v) { return (SYM[k] || k) + ' ' + v + '/10'; });
+      li.innerHTML = '<span class="lvl ' + a.level + '">' + a.level.toUpperCase() + '</span><span><b>' + esc(a.code) + '</b> ' + esc(trig) +
+        (a.message && !a.seeded ? '<div class="meta">「' + esc(a.message) + '」</div>' : '') + '</span><span class="meta">' + fmt(a.ts) + (a.ack ? '<br>✓ ' + esc(a.ack) : '<br>未確認') + '</span>';
+      ul.appendChild(li);
+    });
+    seenAlerts = alerts.length;
+
+    var tb = $('patients'); tb.innerHTML = '';
+    D.patients.forEach(function (p) {
+      var s = sessions[p.code], live = s.messages.filter(function (m) { return m.role === 'patient'; });
+      var last = live.length ? live[live.length - 1].text : s.seedLast;
+      var flags = s.alerts.length, hi = s.alerts.some(function (a) { return a.level === 'high'; });
+      tb.innerHTML += '<tr><td class="mono">' + p.code + '</td><td>' + esc(p.name) + '<div class="legend" style="margin:0">' + p.age + ' 歲 ' + esc(p.cancer) + '</div></td><td>' + (s.seedMessages + s.messages.length) + '</td><td style="color:' + (hi ? 'var(--red-flag)' : flags ? 'var(--amber)' : 'inherit') + '">' + flags + '</td><td class="legend" style="margin:0">' + esc(last.slice(0, 22)) + (last.length > 22 ? '…' : '') + '</td></tr>';
+    });
+
+    var sb = $('scores'); sb.innerHTML = '';
+    D.patients.forEach(function (p) {
+      var by = {};
+      sessions[p.code].scores.forEach(function (x) { (by[x.symptom] = by[x.symptom] || []).push(x); });
+      Object.keys(by).forEach(function (k) {
+        sb.innerHTML += '<tr><td class="mono">' + p.code + '</td><td>' + esc(SYM[k] || k) + '</td><td class="series">' +
+          by[k].map(function (x) { return '<span class="' + (x.score >= 7 ? 'sev' : '') + '" title="' + fmt(x.ts) + (x.extra && x.extra.count != null ? ' · ' + x.extra.count + ' 次' : '') + '">' + x.score + '</span>'; }).join('→ ') + '</td></tr>';
+      });
+    });
+    if (!sb.innerHTML) sb.innerHTML = '<tr><td colspan="3" class="empty">尚無症狀分數</td></tr>';
+
+    var q = Object.assign({}, D.seed.quality);
+    Object.keys(sessions).forEach(function (c) { sessions[c].messages.forEach(function (m) { if (m.resp) q[m.resp.quality] = (q[m.resp.quality] || 0) + 1; }); });
+    $('quality').innerHTML = QUALITY_ORDER.filter(function (k) { return q[k]; }).map(function (k) { return '<div><b>' + q[k] + '</b>' + k + '</div>'; }).join('');
+
+    var agg = {};
+    Object.keys(sessions).forEach(function (c) { sessions[c].quiz.forEach(function (r) { var a = agg[r.onc] = agg[r.onc] || { pre: [], post: [] }; a[r.phase].push(r.score); }); });
+    var avg = function (arr) { return arr.length ? (arr.reduce(function (x, y) { return x + y; }, 0) / arr.length).toFixed(1) : '—'; };
+    $('quiz-stats').innerHTML = Object.keys(agg).sort().map(function (onc) {
+      return '<tr><td class="mono">' + onc + ' ' + esc(D.quiz[onc] ? D.quiz[onc].topic : '') + '</td><td>' + avg(agg[onc].pre) + '</td><td>' + avg(agg[onc].post) + '</td><td>' + (agg[onc].pre.length + agg[onc].post.length) + '</td></tr>';
+    }).join('') || '<tr><td colspan="4" class="empty">尚無測驗</td></tr>';
+
+    var ev = [];
+    Object.keys(sessions).forEach(function (c) { sessions[c].events.forEach(function (e) { ev.push(Object.assign({ code: c }, e)); }); });
+    ev.sort(function (a, b) { return a.ts < b.ts ? 1 : -1; });
+    $('events').innerHTML = ev.slice(0, 12).map(function (e) { return '<li><span class="t">' + fmt(e.ts) + '</span><b>' + esc(e.code) + '</b> ' + esc(e.type) + ' <span class="mono">' + esc(JSON.stringify(e.payload)) + '</span></li>'; }).join('') || '<li class="empty">本次尚無事件（seed 事件不在此列）</li>';
+  }
+
+  // ── 測驗 ──
+  var quizPhase = 'pre';
+  function openQuiz() {
+    var sel = $('quiz-topic'); sel.innerHTML = '';
+    Object.keys(D.quiz).forEach(function (onc) { var o = document.createElement('option'); o.value = onc; o.textContent = onc + ' ' + D.quiz[onc].topic; sel.appendChild(o); });
+    sel.value = 'ONC-22'; renderQuiz(); $('quiz-result').textContent = ''; $('quiz-overlay').className = 'overlay on';
+  }
+  function renderQuiz() {
+    var q = E.quizQuestions(D, $('quiz-topic').value), body = $('quiz-body'); body.innerHTML = '';
+    q.questions.forEach(function (it) {
+      var div = document.createElement('div'); div.className = 'q'; div.dataset.n = it.n;
+      div.innerHTML = '<div>' + it.n + '. ' + esc(it.text) + '</div>' + it.options.map(function (o, i) {
+        var v = it.type === 'mc' ? String(i + 1) : (i === 0 ? 'O' : 'X');
+        return '<label><input type="radio" name="q' + it.n + '" value="' + v + '"> ' + esc(o) + '</label>';
+      }).join('');
+      body.appendChild(div);
+    });
+  }
+  function submitQuiz() {
+    var onc = $('quiz-topic').value, answers = {};
+    document.querySelectorAll('#quiz-body input:checked').forEach(function (i) { answers[i.name.slice(1)] = i.value; });
+    var r = E.quizScore(current, D, onc, answers, quizPhase);
+    r.details.forEach(function (d) {
+      var div = document.querySelector('.q[data-n="' + d.n + '"]'); div.className = 'q ' + (d.correct ? 'ok' : 'bad');
+      if (!d.correct) div.insertAdjacentHTML('beforeend', '<div class="legend">正解：' + esc(d.answer) + '</div>');
+    });
+    $('quiz-result').textContent = current.patient.code + ' ' + (quizPhase === 'pre' ? '前測' : '後測') + ' ' + r.score + ' / ' + r.total + ' 分，已記錄';
+    renderDash();
+  }
+
+  // ── 綁定 ──
+  var ps = $('patient');
+  D.patients.forEach(function (p) { var o = document.createElement('option'); o.value = p.code; o.textContent = p.code + ' ' + p.name; ps.appendChild(o); });
+  ps.addEventListener('change', function () { selectPatient(ps.value); });
+  $('compose').addEventListener('submit', function (e) { e.preventDefault(); send($('input').value); $('input').value = ''; });
+  $('btn-reset').addEventListener('click', function () { var c = current.patient.code; sessions[c] = seedSession(current.patient); selectPatient(c); renderDash(); });
+  $('btn-quiz').addEventListener('click', openQuiz);
+  $('quiz-close').addEventListener('click', function () { $('quiz-overlay').className = 'overlay'; });
+  $('quiz-topic').addEventListener('change', function () { renderQuiz(); $('quiz-result').textContent = ''; });
+  $('quiz-submit').addEventListener('click', submitQuiz);
+  $('ph-pre').addEventListener('click', function () { quizPhase = 'pre'; $('ph-pre').className = 'on'; $('ph-post').className = ''; });
+  $('ph-post').addEventListener('click', function () { quizPhase = 'post'; $('ph-post').className = 'on'; $('ph-pre').className = ''; });
+  SCENARIOS.forEach(function (s) { var b = document.createElement('button'); b.type = 'button'; b.className = s.step ? 'step' : ''; b.textContent = s.label; b.title = s.text; b.addEventListener('click', function () { send(s.text); }); $('quick').appendChild(b); });
+
+  resetAll(); selectPatient('P001'); renderDash();
+})();
+</script>
+</body>
+</html>

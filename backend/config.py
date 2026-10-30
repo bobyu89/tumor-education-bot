@@ -1,6 +1,7 @@
 """
 環境變數與系統設定（使用 Google Gemini API）
 """
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from pathlib import Path
 
@@ -38,6 +39,14 @@ class Settings(BaseSettings):
 
     # 居家病患的緊急聯絡指引（LINE 管道使用；請與醫院確認正確號碼）
     EMERGENCY_CONTACT: str = "請立即撥打 119，或聯絡血液腫瘤科 (02) 8792-7056"
+
+    @field_validator("CHROMA_DB_PATH")
+    @classmethod
+    def _resolve_chroma_path(cls, v: str) -> str:
+        # .env 常寫 CHROMA_DB_PATH=../chroma_db（以 backend/ 為基準）。相對路徑若照執行目錄解析，
+        # 從專案根目錄跑腳本時會指到外層資料夾、默默建出一個空向量庫。一律以 backend/ 為基準。
+        p = Path(v)
+        return str(p if p.is_absolute() else (Path(__file__).parent / p).resolve())
 
     class Config:
         env_file = Path(__file__).parent.parent / ".env"

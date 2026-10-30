@@ -6,6 +6,10 @@
 > ⚠️ 本系統僅供衛教參考，不做診斷、不建議藥物劑量。碰真實病患前請先完成 IRB 與資料隱私規範
 > （見 [`docs/specs/`](docs/specs/)）。
 
+**線上演示（GitHub Pages，純前端）**：<https://bobyu89.github.io/tumor-education-bot/> —— 紅旗攔截、症狀追問、
+有來源的衛教回覆與護理站即時警示都在瀏覽器內模擬，不需安裝、不需 API key。頁面由 `scripts/build_pages.py` 產生資料、
+`docs/demo_engine.js` 移植後端規則（`node scripts/test_pages_engine.js` 驗證）。
+
 ## 目前狀態：Phase 1（地基與安全層）
 
 本版重點是把三個地基問題補穩，讓後續的症狀追問（Phase 2）與研究統計（Phase 3）有可靠基礎：
@@ -49,31 +53,45 @@
 
 ```bash
 # 1. 安裝套件
-cd backend && pip install -r requirements.txt
+cd backend && pip install -r requirements.txt && cd ..
 
-# 2. 設定 .env（專案根目錄）
-GOOGLE_API_KEY=<你的 Google AI Studio API Key>
-LLM_PROVIDER=google
-PRIMARY_MODEL=gemma-3-12b-it
-AUTH_SECRET=<一段夠長的隨機字串>       # 固定後重啟不會把大家登出
-ADMIN_PASSWORD=<第一個管理者的密碼>     # 尚無管理者時，啟動會建立帳號 admin
+# 2. 設定 .env（專案根目錄；.env 不進版控）
+cp .env.example .env
+#    預設 LLM_PROVIDER=mock（演示模式，不需 API key）
+#    要用真實模型：LLM_PROVIDER=google + GOOGLE_API_KEY=<Google AI Studio 金鑰>
+#    正式環境務必設定：AUTH_SECRET（固定後重啟不會把大家登出）、
+#                      ADMIN_PASSWORD（尚無管理者時，啟動會建立帳號 admin）
 
 # 3. 建立向量索引（首次會下載嵌入模型）
 python -X utf8 scripts/index_vault.py --rebuild
 
-# 4. 啟動（本機遊玩可直接執行 start.ps1）
+# 4.（可選）植入模擬案例：5 位虛構病患、兩週對話／症狀／警示／測驗
+python -X utf8 scripts/seed_demo.py --reset
+
+# 5. 啟動（本機遊玩可直接執行 start.ps1）
 cd backend && python -X utf8 -m uvicorn main:app --port 8000
 
-# 5. 瀏覽器開 http://localhost:8000
+# 6. 瀏覽器開 http://localhost:8000
 ```
 
-### 示範帳號（只在 `DEMO_SEED=true` 時建立）
+### 演示（不需 API key）
 
-`start.ps1` 會自動開啟 `DEMO_SEED`，供本機遊玩：
+完整演示腳本見 [`docs/demo/演示腳本.md`](docs/demo/演示腳本.md)：9 個情境（一般問答、症狀評估、
+升級警示、HIGH 紅旗、否定語境、自傷語意、知識庫外轉介、測驗前後測、研究者匯出），
+每個情境給輸入原文與預期畫面。`python -X utf8 scripts/demo_dry_run.py` 會把全部情境自動跑一遍當彩排。
+
+演示模式（`LLM_PROVIDER=mock`）只把「生成」換成本地規則從檢索段落組裝，紅旗／評估／RAG／品質閘／落庫
+與正式模式完全相同；換真實模型只改 `.env`。
+
+### 測試帳號（僅限本機）
+
+本機要有帳號可登入，二擇一：
+- 執行 `scripts/seed_demo.py --reset`：建立下列帳號與兩週模擬資料
+- 或用 `start.ps1` 啟動（會設定 `DEMO_SEED=true`）：首次啟動只建立 P001／R001／A001
 
 | 帳號 | 密碼 | 角色 |
 |---|---|---|
-| P001 | patient123 | 病患 |
+| P001–P005 | patient123 | 病患（模擬，各有不同年齡／癌別／語氣） |
 | R001 | research123 | 研究者 |
 | A001 | admin123 | 管理者 |
 
