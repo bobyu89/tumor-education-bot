@@ -189,18 +189,27 @@ def chunk_section(name: str, content: str, fits) -> list[str]:
                             stack.extend([cur[mid:], cur[:mid]])
         return units
 
+    # 不丟任何文字：短於 MIN_CHUNK 的零頭先嘗試併入前一段，放不下就自成一段。
+    # （舊版直接捨棄零頭，實測 ONC-23「年齡因素」與 ONC-35「內關穴位置」共 62 字從未進入知識庫。）
     out: list[str] = []
     buf = ""
+
+    def flush(piece: str):
+        if not piece:
+            return
+        if out and len(piece) < MIN_CHUNK and fits(f"{out[-1]}\n{piece}"):
+            out[-1] = f"{out[-1]}\n{piece}"
+        else:
+            out.append(piece)
+
     for unit in split_units(content):
         cand = f"{buf}\n{unit}" if buf else unit
         if fits(cand):
             buf = cand
         else:
-            if len(buf) >= MIN_CHUNK:
-                out.append(buf)
+            flush(buf)
             buf = unit
-    if len(buf) >= MIN_CHUNK:
-        out.append(buf)
+    flush(buf)
     return out
 
 
