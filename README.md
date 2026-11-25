@@ -81,6 +81,11 @@ cd backend && python -X utf8 -m uvicorn main:app --port 8000
 # 6. 瀏覽器開 http://localhost:8000
 ```
 
+### 正式部署（Docker）
+
+`docker compose --profile https up -d --build`：FastAPI＋Caddy（自動 HTTPS），資料、索引與模型放在 volume，
+映像不含病患資料或密鑰。步驟、`.env` 設定、備份與上線前檢查清單見 [`docs/deploy/部署說明.md`](docs/deploy/部署說明.md)。
+
 ### 演示（不需 API key）
 
 完整演示腳本見 [`docs/demo/演示腳本.md`](docs/demo/演示腳本.md)：9 個情境（一般問答、症狀評估、
