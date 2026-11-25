@@ -17,10 +17,10 @@ TONE_TEMPLATES = {
 使用規則：
 - 說話像跟長輩聊天，用「您」，字少意明
 - 每次只說 1-2 個重點
-- 用比喻解釋醫學概念（例如：白血球就像身體的警衛）
+- 可用生活化的比喻幫助理解，但比喻不能增加衛教資料沒有的醫學內容
 - 絕對不用英文縮寫
 - 句子不超過 20 個字
-- 最後加一句鼓勵的話
+- 最後加一句鼓勵的話（「何時要就醫」的提醒不算在 1-2 個重點內）
 """,
     "general": """
 你是一位專業友善的衛教護理師。
@@ -38,7 +38,6 @@ TONE_TEMPLATES = {
 - 提供完整的病理機制解釋
 - 引用衛教資料中的具體數據
 - 分段條列，結構清晰
-- 可提供延伸閱讀建議
 """
 }
 
@@ -60,6 +59,19 @@ def safety_boundary(channel: str = "web") -> str:
     from config import settings
     from safety_text import safety_rule_for_prompt
     return SAFETY_BOUNDARY.format(action=safety_rule_for_prompt(channel, settings.EMERGENCY_CONTACT))
+
+# ── 依據規則（2026-11 同儕審查：v1 寫「請優先參考」，等於允許模型用自己的訓練知識補充）──
+# 無法回答時輸出固定標記，由 quality.classify 偵測、chat_service 改成固定轉介文字（不由模型自行措辭）。
+UNANSWERABLE_MARK = "[無法回答]"
+
+GROUNDING_RULES = f"""── 回答規則（必須遵守） ──
+1. 只能使用上方「衛教知識庫內容」回答。資料沒有寫到的，不要自行補充，
+   包括一般醫學常識、藥物名稱、劑量、檢驗數值或其他醫院的做法。
+2. 每一項建議後面，用括號標註出處的單張代碼，例如（ONC-17）。
+3. 如果上方資料無法回答病人的問題，只輸出 {UNANSWERABLE_MARK}，不要輸出任何其他文字。
+4. 如果上方資料中有「何時通知醫護人員」或「需要就醫」的內容，而且和病人的問題有關，在回答最後提醒病人。
+"""
+
 
 # ── 主函式 ──────────────────────────────────────────
 
@@ -96,14 +108,12 @@ def build_prompt(
 ── 病患資訊 ──
 {patient_info}
 
-── 衛教知識庫內容（請優先參考以下資料回答） ──
+── 衛教知識庫內容（你只能根據以下資料回答） ──
 {rag_context}
 
+{GROUNDING_RULES}
 ── 輸出格式要求 ──
 {format_instruction}
-
-注意：若知識庫中沒有相關資料，請誠實告知「這個問題我需要請護理師來幫您解答」，
-不要自行編造衛教內容。
 """
     return prompt.strip()
 
@@ -125,9 +135,9 @@ def _format_rag_context(docs: list[dict]) -> str:
     if not docs:
         return "（無相關衛教資料）"
     sections = []
-    for i, doc in enumerate(docs[:4], 1):   # 最多取 4 段
+    for i, doc in enumerate(docs, 1):       # rag.py 已依 RAG_TOP_K 限制段數；chunk 本身 ≤170 字，不再截斷
         source = doc.get("source", "")
-        content = doc.get("content", "")[:400]   # 每段最多 400 字
+        content = doc.get("content", "")
         score = doc.get("score", 0)
         sections.append(f"[資料{i}｜來源：{source}｜相關度：{score}]\n{content}")
     return "\n\n".join(sections)

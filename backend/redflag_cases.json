@@ -425,6 +425,24 @@
    "expect": "high",
    "category": "dehydration",
    "src": "資工審查探針（v2 首次獨立實測漏接，修正後加入；此後不再是獨立測試）"
+  },
+  {
+   "text": "我現在胸痛而且喘不過氣",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "演示腳本 S4；子句切分不可切斷『喘不過氣』"
+  },
+  {
+   "text": "喘不過氣來",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "演示腳本 S4；子句切分不可切斷『喘不過氣』"
+  },
+  {
+   "text": "有點喘不過來，不過還好",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "演示腳本 S4；子句切分不可切斷『喘不過氣』"
   }
  ]
 }

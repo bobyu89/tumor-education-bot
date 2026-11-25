@@ -81,8 +81,25 @@ check("有來源 → pre_check True", quality.pre_check([{"source": "ONC-17"}]) 
 check("無來源分類", quality.classify("隨便講", []) == "deflected_no_source")
 check("模型自述轉介 → off_source",
       quality.classify("這個我無法回答，請護理師協助", [{"source": "x"}]) == "deflected_off_source")
-check("正常有來源 → grounded",
-      quality.classify("口腔黏膜炎建議溫鹽水漱口", [{"source": "x"}]) == "grounded")
+# v2（2026-11）：回答必須標註出處，且出處要在提供給模型的資料內
+SRC = [{"source": "ONC-17 口腔黏膜炎"}]
+check("標註出處且在資料內 → grounded",
+      quality.classify("建議用軟毛牙刷清潔口腔（ONC-17）", SRC) == "grounded")
+check("沒標出處 → uncited",
+      quality.classify("口腔黏膜炎建議溫鹽水漱口", SRC) == "uncited")
+check("標註未提供的單張 → citation_mismatch",
+      quality.classify("建議多喝水（ONC-22）", SRC) == "citation_mismatch")
+check("輸出無法回答標記 → deflected_unanswerable",
+      quality.classify("[無法回答]", SRC) == "deflected_unanswerable")
+
+print("\n=== prompt 依據規則 ===")
+from prompt import build_prompt, UNANSWERABLE_MARK
+pt = build_prompt(None, [{"source": "ONC-17 口腔黏膜炎", "content": "餐後以軟毛牙刷清潔口腔。", "score": 0.8}])
+check("寫明只能根據資料回答", "你只能根據以下資料回答" in pt and "優先參考" not in pt)
+check("要求標註單張代碼", "（ONC-17）" in pt)
+check("無法回答時輸出固定標記", UNANSWERABLE_MARK in pt)
+check("要求提醒何時就醫", "何時通知醫護人員" in pt)
+check("不再允許延伸閱讀", "延伸閱讀" not in build_prompt(None, [], output_format="text"))
 
 print(f"\n{'='*40}")
 print(f"通過 {_pass} / {_pass + _fail}")

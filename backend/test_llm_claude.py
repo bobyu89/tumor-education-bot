@@ -187,7 +187,15 @@ with db.get_conn() as conn:
                      "ORDER BY id DESC").fetchone()
     a = conn.execute("SELECT level, trigger FROM alerts WHERE patient_code='P900' ORDER BY id DESC").fetchone()
 check("標記 answer_quality = llm_refusal", m["answer_quality"] == "llm_refusal")
-check("進護理端待處理清單（info）", a["level"] == "info" and "模型未回答" in a["trigger"])
+check("進護理端待處理清單（info）", a["level"] == "info" and "無法回答" in a["trigger"])
+
+llm_client._client = FakeLLM(LLMResult("[無法回答]", "claude-sonnet-5-5", "anthropic", 100, 5))
+r = asyncio.run(chat_service.process_message("P900", "牙刷要多久換一次", channel="line"))
+with db.get_conn() as conn:
+    m = conn.execute("SELECT answer_quality FROM messages WHERE patient_code='P900' AND role='bot' "
+                     "ORDER BY id DESC").fetchone()
+check("模型輸出無法回答標記 → 固定轉介、不顯示標記", "沒辦法回答" in r.response and "[無法回答]" not in r.response)
+check("標記 answer_quality = deflected_unanswerable", m["answer_quality"] == "deflected_unanswerable")
 
 rag.retriever.query = _orig_query
 llm_client._client = None

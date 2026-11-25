@@ -45,6 +45,12 @@ check("體溫：中文數字三十九度", parse_temperature("燒到三十九度
 check("體溫：環境溫度不算", parse_temperature("外面38度") is None)
 check("體溫：非體溫範圍不算", parse_temperature("化療第10天") is None)
 
+# 結構檢查：任何關鍵字本身都不可被子句切分規則切斷（例：「不過」曾把「喘不過氣」切成兩段）
+import redflag as _rf
+_split = [p for _, p in _rf.HIGH_PHYSICAL + _rf.MEDIUM if not p.startswith("re:") and len(clauses(p)) > 1]
+_split += [k for k in _rf.HIGH_SELF_HARM if len(clauses(k)) > 1]
+check("沒有關鍵字會被子句切分切斷", not _split, str(_split))
+
 print("\n=== 自傷類不套否定 ===")
 check("「我不想活了」", screen("我不想活了", use_vector=False).category == "self_harm")
 check("「如果可以我想死」（假設語境仍觸發）", screen("如果可以我想死", use_vector=False).severity == "high")

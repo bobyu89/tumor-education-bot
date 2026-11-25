@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass
 
 from config import settings
+from prompt import UNANSWERABLE_MARK
 
 
 @dataclass
@@ -168,7 +169,8 @@ class MockClient:
       - 沒有 API key 的環境（課堂演示、口試、CI）也能走完整條 /chat 流程
         （紅旗 → 評估 → RAG → 品質閘 → 落庫），只有「生成」這一步換成規則組裝。
       - 回覆內容 100% 來自檢索段落，方便展示「回答有憑有據」；
-        相關度都太低時，比照真實 LLM 的誠實邊界回「需請護理師」（品質閘標 deflected_off_source）。
+        每項標註單張代碼；相關度都太低時，比照 prompt 規則只輸出「無法回答」標記
+        （品質閘標 deflected_unanswerable，chat_service 改成固定轉介文字）。
     啟用：.env 設 LLM_PROVIDER=mock。
     """
     provider = "mock"
@@ -193,11 +195,12 @@ class MockClient:
 
         lines: list[str] = []
         for source, points in list(by_source.items())[:n_docs]:
+            code = source.split()[0]
             lines.append(f"根據衛教資料《{source}》：")
-            lines += [f"• {p}。" for p in points[:n_points]]
+            lines += [f"• {p}。（{code}）" for p in points[:n_points]]
             lines.append("")
         if not lines:
-            text = "這個問題我需要請護理師來幫您解答，我先幫您記錄下來。"
+            text = UNANSWERABLE_MARK            # 比照 prompt.GROUNDING_RULES：資料無法回答時只輸出標記
         else:
             lines.append("以上內容僅供衛教參考，若症狀持續或加重，請告知您的醫療團隊。")
             lines.append("（演示模式：本回覆由本地規則從衛教資料組裝，未呼叫雲端 LLM）")

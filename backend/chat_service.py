@@ -192,21 +192,23 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
                        provider=settings.LLM_PROVIDER, answer_quality="llm_error")
         return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
 
-    if result.refused or not result.text.strip():
-        # 模型拒答（或回傳空白）：不顯示空白，改回固定轉介文字，並進護理端待處理清單
+    label = "llm_refusal" if (result.refused or not result.text.strip()) else quality.classify(result.text, rag_docs)
+    if label in ("llm_refusal", "deflected_unanswerable"):
+        # 模型拒答、回傳空白，或依規則表示「資料無法回答」：不顯示模型的文字，
+        # 改回固定轉介文字，並把問題放進護理端待處理清單
         reply = deflect_reply(channel, settings.EMERGENCY_CONTACT)
         db.add_message(pid, "bot", lead + reply, rag_sources=sources,
                        model_id=result.model_id, provider=result.provider,
                        prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
-                       answer_quality="llm_refusal")
-        db.add_alert(pid, f"模型未回答：{query_text[:40]}", "info", msg_id, notified_channels=[])
+                       answer_quality=label)
+        db.add_alert(pid, f"衛教資料無法回答：{query_text[:40]}", "info", msg_id, notified_channels=[])
         return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
 
     reply = result.text
     db.add_message(pid, "bot", lead + reply, rag_sources=sources,
                    model_id=result.model_id, provider=result.provider,
                    prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
-                   answer_quality=quality.classify(reply, rag_docs))
+                   answer_quality=label)
     return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
 
 

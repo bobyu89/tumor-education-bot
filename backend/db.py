@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS messages (
     provider          TEXT,
     prompt_tokens     INTEGER,
     completion_tokens INTEGER,
-    answer_quality    TEXT                    -- grounded|deflected_no_source|deflected_off_source|redflag_shortcut|llm_error|llm_refusal
+    answer_quality    TEXT                    -- 見 quality.py 品質標籤；另有 llm_error|llm_refusal|assessment*
 );
 
 CREATE TABLE IF NOT EXISTS alerts (
