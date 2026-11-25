@@ -70,7 +70,7 @@ with TestClient(main.app) as client:
     check("網頁回覆：以呼叫鈴為主", "呼叫鈴" in r["response"])
 
     print("\n=== HIGH：有護理端在線 → 實際推播 ===")
-    with client.websocket_connect(f"/ws/nurse?token={R['X-Auth-Token']}") as ws:
+    with client.websocket_connect(f"/ws/nurse?ticket={client.post('/ws/ticket', headers=R).json()['ticket']}") as ws:
         r = client.post("/chat", json={"message": "我昨天沒睡好今天胸痛"}, headers=P).json()
         msg = json.loads(ws.receive_text())
         check("v1 否定誤殺案例現在觸發 HIGH", r["is_emergency"] is True)

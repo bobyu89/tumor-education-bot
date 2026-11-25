@@ -1397,11 +1397,15 @@ function beep() {
   } catch { /* 瀏覽器不允許自動播放時略過 */ }
 }
 
-function connectNurseWS() {
+async function connectNurseWS() {
   if (!authToken) return;
   try {
+    // 先用登入 token（放在 header）換一張 60 秒有效的票券；網址裡只放票券，不放登入 token
+    const t = await fetch(`${API}/ws/ticket`, { method: 'POST', headers: { 'X-Auth-Token': authToken } });
+    if (!t.ok) { setWsState(false); if (authToken) setTimeout(connectNurseWS, 5000); return; }
+    const { ticket } = await t.json();
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    wsNurse = new WebSocket(`${proto}://${location.host}/ws/nurse?token=${encodeURIComponent(authToken)}`);
+    wsNurse = new WebSocket(`${proto}://${location.host}/ws/nurse?ticket=${encodeURIComponent(ticket)}`);
     wsNurse.onopen = () => setWsState(true);
     wsNurse.onclose = () => {
       setWsState(false);

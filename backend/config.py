@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     DEMO_SEED: bool = False                    # True 才植入 P001/R001/A001 示範帳號（僅限本機）
     ADMIN_ACCOUNT: str = "admin"               # 若尚無管理者且 ADMIN_PASSWORD 有值，啟動時建立
     ADMIN_PASSWORD: str = ""
+    # 登入失敗鎖定：同一帳號 LOGIN_LOCK_MINUTES 分鐘內失敗 LOGIN_MAX_FAILURES 次 → 暫停登入
+    LOGIN_MAX_FAILURES: int = 5
+    LOGIN_LOCK_MINUTES: int = 15
 
     # ── 網頁 ──
     # 前端與 API 同網域時不需要 CORS。只有前端放在別的網域才填，以逗號分隔。

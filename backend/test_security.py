@@ -48,15 +48,26 @@ with TestClient(main.app) as client:
     check("/sessions 無 token → 401", client.get("/sessions").status_code == 401)
     check("/sessions 病患 token → 403", client.get("/sessions", headers=P).status_code == 403)
 
-    print("\n=== S2 WebSocket 需研究者 token，且推播不含真名 ===")
-    for label, url in [("無 token", "/ws/nurse"), ("病患 token", f"/ws/nurse?token={P['X-Auth-Token']}")]:
+    print("\n=== S2 WebSocket 需研究者短效票券，且推播不含真名 ===")
+    check("病患不能取得 WS 票券", client.post("/ws/ticket", headers=P).status_code == 403)
+    ticket = client.post("/ws/ticket", headers=R).json()["ticket"]
+    import auth as _auth
+    check("票券不能拿來呼叫 API", client.get("/sessions", headers={"X-Auth-Token": ticket}).status_code == 401)
+    import time as _time, base64 as _b64, hmac as _hmac, hashlib as _hl
+    _exp = _b64.urlsafe_b64encode(json.dumps({"account": "R001", "role": "researcher", "typ": "ws_ticket",
+                                              "exp": int(_time.time()) - 1}).encode()).decode()
+    expired = f"{_exp}.{_hmac.new(_auth._SECRET, _exp.encode(), _hl.sha256).hexdigest()}"
+    for label, url in [("無票券", "/ws/nurse"),
+                       ("登入 token 放網址（舊做法）", f"/ws/nurse?ticket={R['X-Auth-Token']}"),
+                       ("舊參數 ?token=", f"/ws/nurse?token={R['X-Auth-Token']}"),
+                       ("過期票券", f"/ws/nurse?ticket={expired}")]:
         try:
             with client.websocket_connect(url) as ws:
                 ws.receive_text()
             check(f"WS {label} → 應被拒", False)
         except WebSocketDisconnect:
             check(f"WS {label} → 被拒", True)
-    with client.websocket_connect(f"/ws/nurse?token={R['X-Auth-Token']}") as ws:
+    with client.websocket_connect(f"/ws/nurse?ticket={ticket}") as ws:
         client.post("/chat", json={"message": "我突然胸痛"}, headers=P)
         alert = ws.receive_json()
     check("研究者 WS 收到警示", alert.get("type") == "EMERGENCY_ALERT")
@@ -143,6 +154,30 @@ check("= 開頭加單引號", stats._csv_safe("=HYPERLINK(\"http://x\")").starts
 check("@ 開頭加單引號", stats._csv_safe("@SUM(A1)") == "'@SUM(A1)")
 check("一般文字不變", stats._csv_safe("我嘴巴破了") == "我嘴巴破了")
 check("數字不變", stats._csv_safe(7) == 7)
+
+print("\n=== 登入失敗鎖定（2026-11 同儕審查）===")
+from config import settings as _st
+db.DB_PATH = Path(tempfile.gettempdir()) / "tumor_bot_sec_lock.sqlite3"
+db.DB_PATH.unlink(missing_ok=True)
+_st.DEMO_SEED = True
+with TestClient(main.app) as client:       # startup：init_db + 植入 R001 等示範帳號
+    auth.create_user("LOCKME", "right-password-123", "researcher")
+    bad = [client.post("/login", json={"account": "LOCKME", "password": "wrong"}).status_code
+           for _ in range(_st.LOGIN_MAX_FAILURES)]
+    check(f"前 {_st.LOGIN_MAX_FAILURES} 次錯誤 → 401", bad == [401] * _st.LOGIN_MAX_FAILURES)
+    r = client.post("/login", json={"account": "LOCKME", "password": "right-password-123"})
+    check("達上限後連正確密碼也暫時拒絕 → 429", r.status_code == 429 and "分鐘後再試" in r.json()["detail"])
+    check("其他帳號不受影響", client.post("/login", json={"account": "R001", "password": "research123"}).status_code == 200)
+    nobody = [client.post("/login", json={"account": "NO_SUCH", "password": "x"}).status_code
+              for _ in range(_st.LOGIN_MAX_FAILURES + 1)]
+    check("不存在的帳號也同樣鎖定（不洩漏帳號是否存在）", nobody[-1] == 429)
+    with db.get_conn() as conn:
+        conn.execute("UPDATE events SET ts='2020-01-01T00:00:00+00:00' WHERE actor='LOCKME' AND event_type='login_failed'")
+    check("鎖定時間過後可再登入", client.post("/login", json={"account": "LOCKME", "password": "right-password-123"}).status_code == 200)
+    for _ in range(_st.LOGIN_MAX_FAILURES - 1):
+        client.post("/login", json={"account": "R001", "password": "wrong"})
+    check("成功登入後失敗次數重新計算", client.post("/login", json={"account": "R001", "password": "research123"}).status_code == 200)
+db.DB_PATH.unlink(missing_ok=True)
 
 print(f"\n{'='*40}\n通過 {_pass} / {_pass + _fail}")
 sys.exit(0 if _fail == 0 else 1)

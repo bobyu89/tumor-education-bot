@@ -111,7 +111,7 @@ with TestClient(main.app) as client:
               for a in s["red_flags"]))
 
     title("S4 HIGH 紅旗瞬間短路 + 護理師 WebSocket 推播")
-    with client.websocket_connect(f"/ws/nurse?token={R['X-Auth-Token']}") as ws:
+    with client.websocket_connect(f"/ws/nurse?ticket={client.post('/ws/ticket', headers=R).json()['ticket']}") as ws:
         r = say(client, "P001", "我現在胸痛而且喘不過氣")
         check("emergency、固定安全回覆、不進 RAG", r["is_emergency"] and "呼叫鈴" in r["response"] and r["sources"] == [])
         check("命中關鍵字 胸痛/喘不過氣", set(r["emergency_keywords"]) >= {"胸痛", "喘不過氣"})

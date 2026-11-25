@@ -28,7 +28,7 @@ from config import settings
 from models import ChatRequest, ChatResponse, LoginRequest, PatientCreate, QuizSubmit
 from rag import retriever
 from security import (admin_user, check_patient_code, is_valid_patient_code,
-                      patient_user, staff_from_ws_token, staff_user)
+                      patient_user, staff_from_ws_ticket, staff_user)
 from websocket_manager import manager
 
 app = FastAPI(
@@ -103,7 +103,11 @@ def _audit(user: dict, event: str, patient_code: str | None = None, **payload):
 # ── 認證 ──────────────────────────────────────────────────────────
 @app.post("/login")
 async def login(req: LoginRequest):
-    result = auth.authenticate(req.account.strip(), req.password)
+    try:
+        result = auth.authenticate(req.account.strip(), req.password)
+    except auth.LoginLocked:
+        raise HTTPException(status_code=429,
+                            detail=f"登入失敗次數過多，請 {settings.LOGIN_LOCK_MINUTES} 分鐘後再試，或聯絡管理者")
     if not result:
         raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
     return result
@@ -295,10 +299,16 @@ async def line_webhook(request: Request, background: BackgroundTasks):
     return {"status": "ok"}
 
 
+@app.post("/ws/ticket")
+async def ws_ticket(user: dict = Depends(staff_user)):
+    """取得 60 秒有效的 WebSocket 連線票券（網址裡只放票券，不放登入 token）。"""
+    return {"ticket": auth.make_ws_ticket(user)}
+
+
 @app.websocket("/ws/nurse")
-async def nurse_websocket(websocket: WebSocket, token: str = Query(default="")):
-    # 瀏覽器的 WebSocket 不能帶自訂 header，改用 ?token= 驗證（資安審查 S2）
-    if staff_from_ws_token(token) is None:
+async def nurse_websocket(websocket: WebSocket, ticket: str = Query(default="")):
+    # 瀏覽器的 WebSocket 不能帶自訂 header → 用 ?ticket= 短效票券驗證（資安審查 S2；2026-11 同儕審查）
+    if staff_from_ws_ticket(ticket) is None:
         await websocket.close(code=1008)
         return
     await manager.connect(websocket)
