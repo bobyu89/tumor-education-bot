@@ -64,10 +64,12 @@ def safety_boundary(channel: str = "web") -> str:
 # 無法回答時輸出固定標記，由 quality.classify 偵測、chat_service 改成固定轉介文字（不由模型自行措辭）。
 UNANSWERABLE_MARK = "[無法回答]"
 
-GROUNDING_RULES = f"""── 回答規則（必須遵守） ──
+def grounding_rules(example_code: str = "單張代碼") -> str:
+    """回答規則。引用範例用這次實際提供的單張代碼（不寫死科別代碼格式）。"""
+    return f"""── 回答規則（必須遵守） ──
 1. 只能使用上方「衛教知識庫內容」回答。資料沒有寫到的，不要自行補充，
    包括一般醫學常識、藥物名稱、劑量、檢驗數值或其他醫院的做法。
-2. 每一項建議後面，用括號標註出處的單張代碼，例如（ONC-17）。
+2. 每一項建議後面，用括號標註出處的單張代碼，例如（{example_code}）。
 3. 如果上方資料無法回答病人的問題，只輸出 {UNANSWERABLE_MARK}，不要輸出任何其他文字。
 4. 如果上方資料中有「何時通知醫護人員」或「需要就醫」的內容，而且和病人的問題有關，在回答最後提醒病人。
 """
@@ -111,11 +113,19 @@ def build_prompt(
 ── 衛教知識庫內容（你只能根據以下資料回答） ──
 {rag_context}
 
-{GROUNDING_RULES}
+{grounding_rules(_example_code(rag_docs))}
 ── 輸出格式要求 ──
 {format_instruction}
 """
     return prompt.strip()
+
+
+def _example_code(docs: list[dict]) -> str:
+    for d in docs:
+        code = d.get("code") or str(d.get("source", "")).split(" ")[0]
+        if code:
+            return code
+    return "單張代碼"
 
 
 def _format_patient_info(profile) -> str:

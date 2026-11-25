@@ -193,7 +193,12 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
                        provider=settings.LLM_PROVIDER, answer_quality="llm_error")
         return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
 
-    label = "llm_refusal" if (result.refused or not result.text.strip()) else quality.classify(result.text, rag_docs)
+    versions = {d["code"]: d.get("doc_version", "") for d in rag_docs if d.get("code")}
+    if result.refused or not result.text.strip():
+        label = "llm_refusal"
+    else:
+        known = await asyncio.to_thread(retriever.known_codes)
+        label = quality.classify(result.text, rag_docs, known)
     if label in ("llm_refusal", "deflected_unanswerable"):
         # 模型拒答、回傳空白，或依規則表示「資料無法回答」：不顯示模型的文字，
         # 改回固定轉介文字，並把問題放進護理端待處理清單
@@ -201,7 +206,7 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
         db.add_message(pid, "bot", lead + reply, rag_sources=sources,
                        model_id=result.model_id, provider=result.provider,
                        prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
-                       answer_quality=label)
+                       answer_quality=label, rag_doc_versions=versions)
         db.add_alert(pid, f"衛教資料無法回答：{query_text[:40]}", "info", msg_id, notified_channels=[])
         return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
 
@@ -209,7 +214,7 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
     db.add_message(pid, "bot", lead + reply, rag_sources=sources,
                    model_id=result.model_id, provider=result.provider,
                    prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
-                   answer_quality=label)
+                   answer_quality=label, rag_doc_versions=versions)
     return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
 
 

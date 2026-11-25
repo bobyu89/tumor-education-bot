@@ -200,7 +200,7 @@ class MockClient:
             lines += [f"• {p}。（{code}）" for p in points[:n_points]]
             lines.append("")
         if not lines:
-            text = UNANSWERABLE_MARK            # 比照 prompt.GROUNDING_RULES：資料無法回答時只輸出標記
+            text = UNANSWERABLE_MARK            # 比照 prompt.grounding_rules()：資料無法回答時只輸出標記
         else:
             lines.append("以上內容僅供衛教參考，若症狀持續或加重，請告知您的醫療團隊。")
             lines.append("（演示模式：本回覆由本地規則從衛教資料組裝，未呼叫雲端 LLM）")

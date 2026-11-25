@@ -74,9 +74,18 @@ class RAGRetriever:
                     "section": meta.get("section", ""),
                     "category": meta.get("category") or meta.get("disease_category", ""),
                     "topic": meta.get("topic", ""),
+                    "doc_version": meta.get("doc_version", ""),
                     "score": round(1 - dist, 3),
                 })
         return output
+
+    def known_codes(self) -> frozenset[str]:
+        """知識庫中所有單張代碼（引用核對用：不假設代碼格式，換科別或新增單張時自動生效）。
+        每次呼叫讀一次集合 metadata；單張數量級在數千段以內，成本可忽略，且保證與索引同步。"""
+        if self.collection.count() == 0:
+            return frozenset()
+        metas = self.collection.get(include=["metadatas"])["metadatas"]
+        return frozenset(m["code"] for m in metas if m and m.get("code"))
 
 
 retriever = RAGRetriever()

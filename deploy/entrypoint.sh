@@ -16,18 +16,11 @@ if [ "${LLM_PROVIDER:-google}" = "google" ]; then
        "不可用於真實病患；正式收案請設 LLM_PROVIDER=anthropic" >&2
 fi
 
-# ── 首次啟動：建立向量索引（同時下載嵌入模型到 /app/models）──
-count=$(python -X utf8 -c "
-import chromadb
-try:
-    print(chromadb.PersistentClient(path='chroma_db').get_collection('patient_education').count())
-except Exception:
-    print(0)
-" 2>/dev/null | tail -n 1)
-if [ "${count:-0}" = "0" ]; then
-  echo "[entrypoint] 尚無向量索引，開始建立（首次啟動需下載約 470MB 嵌入模型）…"
-  python -X utf8 scripts/index_vault.py --rebuild
-fi
+# ── 每次啟動都同步向量索引（單張新增、改版、停用後重新部署即生效）──
+# 首次啟動會下載約 470MB 的嵌入模型並建立全部段落；之後只處理有變動的單張，沒變動時幾秒內完成。
+# 同步若發現沒有任何可索引的單張會直接失敗，容器不會啟動（避免清空向量庫後照常服務）。
+echo "[entrypoint] 同步衛教單張與向量索引…"
+python -X utf8 scripts/index_vault.py
 
 # ── 啟動 ──
 # 必須是單一 worker：護理端 WebSocket 連線清單與 LINE 事件去重都在同一個行程內

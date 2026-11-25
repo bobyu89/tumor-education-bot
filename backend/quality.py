@@ -37,22 +37,37 @@ def pre_check(rag_docs: list[dict]) -> bool:
     return len(rag_docs) > 0
 
 
-_CODE_RE = re.compile(r"ONC-\d{2}")
+# 括號內「像單張代碼」的字串，例如（ONC-17）、（CV-01）、(DM-102)。用來抓模型編出、知識庫裡不存在的代碼。
+_PAREN_CODE = re.compile(r"[（(]\s*([A-Z][A-Z0-9]{1,7}-\d{1,4})\s*[)）]")
 
 
 def provided_codes(rag_docs: list[dict]) -> set[str]:
-    return {m for d in rag_docs for m in _CODE_RE.findall(str(d.get("source", "")))}
+    """這次提供給模型的單張代碼。優先用 rag 回傳的 code；舊資料退回來源標籤的第一個字。"""
+    out = set()
+    for d in rag_docs:
+        code = d.get("code") or str(d.get("source", "")).split(" ")[0]
+        if code:
+            out.add(code)
+    return out
 
 
-def classify(reply: str, rag_docs: list[dict]) -> str:
-    """LLM 回答後標記品質。"""
+def cited_codes(reply: str, known_codes: frozenset[str] | set[str] = frozenset()) -> set[str]:
+    """回答中標註的單張代碼：知識庫中已知的代碼（出現在任何位置），加上括號內像代碼的字串。
+    不寫死任何科別的代碼格式（v1 只認得「ONC-兩位數字」，換科別就全部變成「沒標出處」）。"""
+    cited = {c for c in known_codes if c in reply}
+    cited |= set(_PAREN_CODE.findall(reply))
+    return cited
+
+
+def classify(reply: str, rag_docs: list[dict], known_codes: frozenset[str] | set[str] = frozenset()) -> str:
+    """LLM 回答後標記品質。known_codes：知識庫所有單張代碼（rag.retriever.known_codes()）。"""
     if not rag_docs:
         return "deflected_no_source"
     if UNANSWERABLE_MARK in reply:
         return "deflected_unanswerable"
     if any(sig in reply for sig in _DEFLECT_SIGNALS):
         return "deflected_off_source"
-    cited = set(_CODE_RE.findall(reply))
+    cited = cited_codes(reply, known_codes | provided_codes(rag_docs))
     if not cited:
         return "uncited"
     if cited - provided_codes(rag_docs):

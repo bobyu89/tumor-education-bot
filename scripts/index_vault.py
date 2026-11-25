@@ -12,7 +12,7 @@
   5. chunk 附帶 section 欄位，回答時可標示「出自 ONC-17 的『預防與治療』」。
 
 用法：
-    python -X utf8 scripts/index_vault.py            # 增量（預設）
+    python -X utf8 scripts/index_vault.py            # 同步（預設）：新增新段落、刪除舊版與停用單張的段落
     python -X utf8 scripts/index_vault.py --rebuild  # 砍掉重建
 """
 
@@ -299,6 +299,40 @@ def get_token_counter():
     return lambda text: len(tok.encode(text).ids)
 
 
+# ── 同步：讓向量庫與單張目前的狀態完全一致 ────────────────────────
+def sync_collection(col, chunks: list[Chunk], batch_size: int = 32) -> dict:
+    """把集合同步成「剛好等於這次切出的 chunks」。
+
+    v1 的增量模式只新增、從不刪除：單張改版後，舊版段落仍留在向量庫，可能被拿來回答。
+    現在以 chunk ID（含單張代碼、版本、章節與內容）比對：
+      - 這次沒有、集合裡有 → 刪除（單張改版的舊段落、已移除或 rag_index 改為 false 的單張）
+      - 這次有、集合裡沒有 → 新增
+    """
+    if not chunks:
+        # 防呆：沒有任何可索引的單張時，不要把整個向量庫清空
+        raise SystemExit("這次沒有切出任何 chunk（全部單張都被略過？）—— 為避免清空向量庫，停止同步")
+    wanted = {c.id: c for c in chunks}
+    existing = set(col.get(include=[])["ids"]) if col.count() else set()
+    stale = sorted(existing - wanted.keys())
+    new = [c for cid, c in wanted.items() if cid not in existing]
+
+    for i in range(0, len(stale), batch_size):
+        col.delete(ids=stale[i : i + batch_size])
+    for i in range(0, len(new), batch_size):
+        batch = new[i : i + batch_size]
+        col.add(
+            ids=[c.id for c in batch],
+            documents=[c.text for c in batch],
+            metadatas=[{
+                "code": c.code, "topic": c.topic, "category": c.category,
+                "section": c.section, "source": c.source,
+                "doc_version": c.doc_version,
+            } for c in batch],
+        )
+        print(f"  嵌入 {min(i + batch_size, len(new))}/{len(new)}")
+    return {"added": len(new), "removed": len(stale), "unchanged": len(wanted) - len(new)}
+
+
 # ── 主流程 ────────────────────────────────────────────────────────
 def build_chunks() -> tuple[list[Chunk], list[dict]]:
     count_tokens = get_token_counter()
@@ -345,8 +379,9 @@ def build_chunks() -> tuple[list[Chunk], list[dict]]:
             for i, text in enumerate(chunk_section(sec_name, sec_body, fits)):
                 # 前置 topic 與章節名，讓嵌入向量帶有主題語境
                 embed_text = prefix + text
+                # ID 含版本：單張改版（即使文字未變）也會換新 ID，舊版由 sync_collection 刪除
                 cid = hashlib.md5(
-                    f"{code}|{sec_name}|{i}|{text}".encode("utf-8")
+                    f"{code}|{doc_version}|{sec_name}|{i}|{text}".encode("utf-8")
                 ).hexdigest()
                 chunks.append(
                     Chunk(
@@ -456,27 +491,11 @@ def main() -> None:
         metadata={"hnsw:space": "cosine"},
     )
 
-    existing = set(col.get(include=[])["ids"]) if col.count() else set()
-    new = [c for c in chunks if c.id not in existing]
-    print(f"既有 {len(existing)} 個 chunks，本次新增 {len(new)} 個")
-
-    if new:
-        B = 32
-        for i in range(0, len(new), B):
-            batch = new[i : i + B]
-            col.add(
-                ids=[c.id for c in batch],
-                documents=[c.text for c in batch],
-                metadatas=[{
-                    "code": c.code, "topic": c.topic, "category": c.category,
-                    "section": c.section, "source": c.source,
-                    "doc_version": c.doc_version,
-                } for c in batch],
-            )
-            print(f"  嵌入 {min(i+B, len(new))}/{len(new)}")
+    result = sync_collection(col, chunks)
+    print(f"新增 {result['added']}、刪除 {result['removed']}（舊版或已停用單張）、未變 {result['unchanged']} 個 chunks")
 
     print(f"\n集合 {COLLECTION_NAME} 現有 {col.count()} 個 chunks")
-    write_report(files_report, total, "rebuild" if args.rebuild else "incremental")
+    write_report(files_report, total, "rebuild" if args.rebuild else "sync")
     print(f"報告 → {REPORT_PATH}")
 
     # 煙霧測試：確認排除章節真的沒進去、且檢索得到正確文件

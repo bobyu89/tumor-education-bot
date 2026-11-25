@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 3   # v2：assessment_state；v3：events.actor + LINE 通行碼綁定
+SCHEMA_VERSION = 4   # v2：assessment_state；v3：events.actor + LINE 通行碼綁定；v4：messages.rag_doc_versions
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "tumor_bot.sqlite3"
 
 
@@ -202,6 +202,11 @@ def init_db() -> None:
             conn.execute("ALTER TABLE events ADD COLUMN actor TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_events_actor ON events(actor, ts)")
 
+        # v4 遷移：messages 記錄回答所依據的單張版本 {代碼: 版本}，單張改版後仍可追溯當時依據哪一版
+        mcols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
+        if "rag_doc_versions" not in mcols:
+            conn.execute("ALTER TABLE messages ADD COLUMN rag_doc_versions TEXT")
+
         row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
         if row["v"] is None or row["v"] < SCHEMA_VERSION:
             conn.execute(
@@ -253,18 +258,21 @@ def add_message(
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     answer_quality: str | None = None,
+    rag_doc_versions: dict[str, str] | None = None,
 ) -> int:
     with get_conn() as conn:
         cur = conn.execute(
             """INSERT INTO messages
                (patient_code, role, content, ts, redflag_level, redflag_terms,
-                rag_sources, model_id, provider, prompt_tokens, completion_tokens, answer_quality)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                rag_sources, model_id, provider, prompt_tokens, completion_tokens, answer_quality,
+                rag_doc_versions)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 patient_code, role, content, _now(), redflag_level,
                 json.dumps(redflag_terms or [], ensure_ascii=False),
                 json.dumps(rag_sources or [], ensure_ascii=False),
                 model_id, provider, prompt_tokens, completion_tokens, answer_quality,
+                json.dumps(rag_doc_versions, ensure_ascii=False) if rag_doc_versions else None,
             ),
         )
         return cur.lastrowid
