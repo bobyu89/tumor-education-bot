@@ -81,7 +81,21 @@ class AssessmentResult:
 
 
 # ── 偵測 ──────────────────────────────────────────────────────────
+# 資訊型提問的線索：問預防、假設、原因，而不是在描述當下的不舒服。
+# 例：「化療前要怎麼預防想吐」不該被反問「您會給幾分」（2026-11 同儕審查，護理審查第 6 點）
+INFO_CUES = ["預防", "避免", "會不會", "化療前", "打針前", "如果", "萬一", "要是", "假如",
+             "是什麼", "為什麼", "原因", "什麼時候會", "多久會"]
+# 描述當下狀況的線索：有這些詞就仍然進症狀評估（例：「我一直拉肚子要怎麼避免脫水」）
+PRESENT_CUES = ["一直", "現在", "已經", "今天", "昨天", "這幾天", "好幾天", "剛剛", "目前", "正在"]
+
+
+def is_info_question(text: str) -> bool:
+    return any(c in text for c in INFO_CUES) and not any(c in text for c in PRESENT_CUES)
+
+
 def detect_symptom(text: str) -> Protocol | None:
+    if is_info_question(text):
+        return None                       # 交給一般衛教（RAG），不進 0–10 分評估
     for p in PROTOCOLS:
         if any(kw in text for kw in p.keywords):
             return p

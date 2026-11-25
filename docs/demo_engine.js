@@ -125,7 +125,15 @@
   var ABORT = ['先不用', '不用了', '算了', '沒事了', '不想說', '跳過', '不用問'];
   var CN = { '零': 0, '一': 1, '兩': 2, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
 
-  function detectSymptom(text) {
+  // 資訊型提問（預防、假設、原因）且沒有描述當下狀況 → 不進評估。線索來自 data.assessmentCues（assessment.py 匯出）
+  function isInfoQuestion(text, data) {
+    var C = data && data.assessmentCues;
+    if (!C) return false;
+    var has = function (list) { return list.some(function (k) { return text.indexOf(k) !== -1; }); };
+    return has(C.info) && !has(C.present);
+  }
+  function detectSymptom(text, data) {
+    if (isInfoQuestion(text, data)) return null;
     for (var i = 0; i < PROTOCOLS.length; i++) {
       if (PROTOCOLS[i].keywords.some(function (k) { return text.indexOf(k) !== -1; })) return PROTOCOLS[i];
     }
@@ -287,7 +295,7 @@
         return complete(s, proto, st.data, trace, flag, data, mediumAlert);
       }
     } else {
-      var p = detectSymptom(text);
+      var p = detectSymptom(text, data);
       if (p) {
         s.assessment = { symptom: p.key, step: 'ask_severity', data: {} };
         log(s, 'assessment_start', { symptom: p.key });

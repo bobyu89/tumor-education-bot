@@ -80,6 +80,18 @@ with TestClient(main.app) as client:
     check("匯出 CSV → 200 且 text/csv", r.status_code == 200 and "text/csv" in r.headers["content-type"])
     check("匯出內容不含真名", "王大明真名" not in r.text)
 
+print("\n=== 匯出前遮蔽病患自行輸入的個資（2026-11 同儕審查）===")
+mid = db.add_message("P001", "patient", "我的電話是0912-345-678，身分證A123456789，體溫38.5度")
+db.add_message("P001", "bot", "請撥打科室電話 (02) 8792-7056")
+db.add_alert("P001", "知識庫外提問：請打給我 0987654321", "info", mid)
+csv_msg2 = stats.export_csv("messages")
+check("病患訊息的手機被遮蔽", "0912-345-678" not in csv_msg2 and "[PHONE]" in csv_msg2)
+check("身分證字號被遮蔽", "A123456789" not in csv_msg2 and "[ID_NO]" in csv_msg2)
+check("臨床數值保留（體溫 38.5）", "38.5度" in csv_msg2)
+check("機器人回覆不遮蔽（科室電話保留）", "8792-7056" in csv_msg2)
+csv_alert = stats.export_csv("alerts")
+check("alerts.trigger 也遮蔽", "0987654321" not in csv_alert and "[PHONE]" in csv_alert)
+
 print(f"\n{'='*40}\n通過 {_pass} / {_pass + _fail}")
 db.DB_PATH.unlink(missing_ok=True)
 sys.exit(0 if _fail == 0 else 1)

@@ -64,6 +64,13 @@ const diff = cases.filter((c) => {
 diff.forEach((c) => console.log('    ✗ ' + c.text + ' → ' + JSON.stringify(E.screenRedFlag(c.text, data))));
 check(cases.length + ' 題全部與後端預期一致', diff.length === 0);
 
+title('資訊型提問不進症狀評估');
+const s4 = E.createSession(P('P001'));
+r = say(s4, '化療前要怎麼預防想吐');
+check('預防提問 → 直接衛教、不問幾分', !/幾分/.test(r.reply) && r.sources.length > 0);
+r = say(s4, '我一直拉肚子要怎麼避免脫水');
+check('有當下線索 → 仍進評估', /幾分/.test(r.reply));
+
 title('S5 否定語境');
 r = say(s1, '醫師說如果胸痛要回診，我現在沒有胸痛，平常要注意什麼');
 check('未觸發緊急', !r.emergency);

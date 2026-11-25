@@ -62,8 +62,8 @@ async def _notify(payload: dict, pid: str, trigger: str, level: str, msg_id: int
 async def process_message(pid: str, text: str, channel: Channel = "web") -> ChatResponse:
     db.ensure_session(pid)
 
-    # ① 紅旗瞬間篩檢
-    flag = redflag_screen(text)
+    # ① 紅旗瞬間篩檢（向量補充層會跑嵌入模型，丟到 thread 執行，不阻塞事件迴圈）
+    flag = await asyncio.to_thread(redflag_screen, text)
     msg_id = db.add_message(pid, "patient", text,
                             redflag_level=flag.severity,
                             redflag_terms=flag.matched_keywords)
@@ -157,7 +157,7 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
     """RAG → 品質前置 → LLM → 品質標記 → 落庫。一般問答與評估後衛教共用。
     code：限制檢索在單一衛教單張（評估後衛教用，症狀→單張對應是確定的，不該靠語意猜）。"""
     profile = load_profile(pid)
-    rag_docs = retriever.query(query_text, code_filter=code)
+    rag_docs = await asyncio.to_thread(retriever.query, query_text, code_filter=code)
     sources = [d["source"] for d in rag_docs]
 
     if not quality.pre_check(rag_docs):

@@ -29,6 +29,12 @@ check("嘴巴破 → mucositis", assessment.detect_symptom("化療後嘴巴破�
 check("手麻 → neuropathy", assessment.detect_symptom("我手腳麻麻的").key == "neuropathy")
 check("掉髮 → hair_loss", assessment.detect_symptom("頭髮一直掉").key == "hair_loss")
 check("純問候 → 無症狀", assessment.detect_symptom("你好啊") is None)
+# 資訊型提問不進評估（2026-11 同儕審查）
+check("預防提問 → 不進評估", assessment.detect_symptom("化療前要怎麼預防想吐") is None)
+check("原因提問 → 不進評估", assessment.detect_symptom("嘴巴破是什麼原因") is None)
+check("假設提問 → 不進評估", assessment.detect_symptom("如果拉肚子可以吃什麼") is None)
+check("有當下線索仍進評估", assessment.detect_symptom("我一直拉肚子要怎麼避免脫水").key == "diarrhea")
+check("描述症狀仍進評估", assessment.detect_symptom("化療後嘴巴破了").key == "mucositis")
 
 print("\n=== ESAS-r 0–10 解析 ===")
 check("數字 8", assessment.parse_severity("大概8分") == 8)

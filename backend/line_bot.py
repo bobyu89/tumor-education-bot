@@ -21,6 +21,7 @@ import sqlite3
 import httpx
 
 import binding
+import db
 from chat_service import _emergency_reply, process_message
 from config import settings
 from db import _now, get_conn
@@ -58,7 +59,36 @@ def first_seen(event_id: str) -> bool:
         return False
 
 
+FAILED = "系統暫時無法處理您的訊息，請稍後再試一次。"
+
+
 async def handle_event(event: dict) -> None:
+    """背景任務入口。webhook 已先回 200 給 LINE，所以這裡失敗時 LINE 不會重送 ——
+    任何例外都必須在這裡接住，至少回病患一則訊息（急症給確定性的緊急指引），不能讓病患石沉大海。"""
+    try:
+        await _handle_event(event)
+    except Exception:
+        logging.exception("[LINE] 事件處理失敗 event_id=%s", event.get("webhookEventId"))
+        await _send_failure_notice(event)
+
+
+async def _send_failure_notice(event: dict) -> None:
+    source = event.get("source") or {}
+    user_id = source.get("userId")
+    if source.get("type") != "user" or not user_id or event.get("type") != "message":
+        return
+    text = ((event.get("message") or {}).get("text") or "").strip()
+    try:
+        db.log_event("line_event_failed", None, {"event_id": event.get("webhookEventId")})
+        flag = redflag_screen(text, use_vector=False)     # 只用確定性的關鍵字層，不依賴任何外部服務
+        body = (_emergency_reply("line", flag.category) if flag.severity == "high"
+                else f"{FAILED}\n如有緊急狀況，{settings.EMERGENCY_CONTACT}。")
+        await send(user_id, event.get("replyToken"), body, urgent=flag.severity == "high")
+    except Exception:
+        logging.exception("[LINE] 連失敗通知都送不出去 user=%s", user_id[:6])
+
+
+async def _handle_event(event: dict) -> None:
     source = event.get("source") or {}
     user_id = source.get("userId")
     if source.get("type") != "user" or not user_id:

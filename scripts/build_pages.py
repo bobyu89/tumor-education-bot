@@ -174,6 +174,13 @@ def export_redflag() -> dict:
     }
 
 
+def export_assessment_cues() -> dict:
+    """症狀評估的「資訊型提問」判斷線索，單一來源：backend/assessment.py。"""
+    _backend()
+    import assessment
+    return {"info": assessment.INFO_CUES, "present": assessment.PRESENT_CUES}
+
+
 def export_safety_text() -> dict:
     _backend()
     import safety_text
@@ -185,6 +192,7 @@ def main():
     quiz = json.loads((ROOT / "backend" / "quiz_bank.json").read_text(encoding="utf-8"))
     data = {"leaflets": leaflets, "quiz": quiz, "patients": PATIENTS, "seed": SEED,
             "redflag": export_redflag(), "safetyText": export_safety_text(),
+            "assessmentCues": export_assessment_cues(),
             "builtFrom": "Obsidian_Vault/衛教知識庫 + backend/quiz_bank.json + backend/redflag.py + backend/safety_text.py"}
     js = ("// 由 scripts/build_pages.py 產生，請勿手改。\n"
           "(function (root) {\n  var DEMO_DATA = " + json.dumps(data, ensure_ascii=False, indent=1) +

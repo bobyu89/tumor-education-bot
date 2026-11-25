@@ -2035,6 +2035,36 @@
   "escalation_suffix_web": "我已經幫您記錄並提醒護理站，請按呼叫鈴讓護理師知道。",
   "escalation_high_note": "這個程度需要盡快就醫。"
  },
+ "assessmentCues": {
+  "info": [
+   "預防",
+   "避免",
+   "會不會",
+   "化療前",
+   "打針前",
+   "如果",
+   "萬一",
+   "要是",
+   "假如",
+   "是什麼",
+   "為什麼",
+   "原因",
+   "什麼時候會",
+   "多久會"
+  ],
+  "present": [
+   "一直",
+   "現在",
+   "已經",
+   "今天",
+   "昨天",
+   "這幾天",
+   "好幾天",
+   "剛剛",
+   "目前",
+   "正在"
+  ]
+ },
  "builtFrom": "Obsidian_Vault/衛教知識庫 + backend/quiz_bank.json + backend/redflag.py + backend/safety_text.py"
 };
   if (typeof module !== 'undefined' && module.exports) module.exports = DEMO_DATA;
