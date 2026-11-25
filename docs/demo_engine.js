@@ -86,8 +86,9 @@
       if (best === null || t > best) best = t;
     });
     if (best === null) return null;
-    if (best >= 38.0) return ['high', '體溫' + fmtTemp(best) + '°C'];
-    if (best >= 37.5) return ['medium', '體溫' + fmtTemp(best) + '°C'];
+    // 門檻依科別設定（data.redflag.tempHigh／tempMedium；null 代表不判）
+    if (R.tempHigh != null && best >= R.tempHigh) return ['high', '體溫' + fmtTemp(best) + '°C'];
+    if (R.tempMedium != null && best >= R.tempMedium) return ['medium', '體溫' + fmtTemp(best) + '°C'];
     return null;
   }
   function uniq(a) { return a.filter(function (x, i) { return a.indexOf(x) === i; }); }
@@ -108,20 +109,14 @@
 
   // ── 症狀評估（assessment.py）─────────────────────────────────
   var ESAS_SEVERE = 7;
-  var PROTOCOLS = [
-    { key: 'nausea', name: '噁心嘔吐', keywords: ['想吐', '噁心', '嘔吐', '反胃', '吐了'], onc: 'ONC-21', field: 'count', question: '這一天下來大概吐了幾次呢？（請給個數字）', escalateCount: 5, highCount: 6, escalates: true },
-    { key: 'diarrhea', name: '腹瀉', keywords: ['拉肚子', '腹瀉', '一直拉', '水便'], onc: 'ONC-22', field: 'count', question: '今天大概拉了幾次呢？（請給個數字）', escalateCount: 6, highCount: 7, escalates: true },
-    { key: 'constipation', name: '便祕', keywords: ['便祕', '便秘', '大不出來', '解不出來', '沒排便'], onc: 'ONC-23', field: 'days', question: '已經幾天沒有排便了呢？（請給個數字）', escalateCount: 3, escalates: true },
-    { key: 'mucositis', name: '口腔黏膜炎', keywords: ['嘴巴破', '口腔破', '口腔潰瘍', '嘴破', '黏膜'], onc: 'ONC-17', escalates: true },
-    { key: 'neuropathy', name: '手腳麻木刺痛', keywords: ['手麻', '腳麻', '手腳麻', '刺痛', '麻木'], onc: 'ONC-38', escalates: true },
-    { key: 'fatigue', name: '疲憊', keywords: ['很累', '疲憊', '沒力氣', '沒體力', '累到'], onc: 'ONC-37', escalates: true },
-    { key: 'appetite', name: '食慾不振', keywords: ['吃不下', '沒胃口', '沒食慾', '不想吃'], onc: 'ONC-21', escalates: true },
-    { key: 'rash', name: '皮膚紅疹', keywords: ['紅疹', '起疹子', '皮膚癢', '長疹子', '皮膚紅'], onc: 'ONC-40', escalates: true },
-    { key: 'hair_loss', name: '落髮', keywords: ['掉髮', '落髮', '頭髮掉', '頭髮一直掉'], onc: 'ONC-24', escalates: false },
-    { key: 'pain', name: '疼痛', keywords: ['好痛', '很痛', '疼痛', '在痛', '痛得'], onc: null, escalates: true }
-  ];
-  var BY_KEY = {};
-  PROTOCOLS.forEach(function (p) { BY_KEY[p.key] = p; });
+  // 症狀評估協定來自 data.protocols（scripts/build_pages.py 從預設科別的 knowledge/<科別>/manifest.json 匯出），
+  // 不在引擎裡另外手抄。
+  function protocolsOf(data) { return (data && data.protocols) || []; }
+  function protocolByKey(data, key) {
+    var list = protocolsOf(data);
+    for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i];
+    return null;
+  }
   var ABORT = ['先不用', '不用了', '算了', '沒事了', '不想說', '跳過', '不用問'];
   var CN = { '零': 0, '一': 1, '兩': 2, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
 
@@ -134,8 +129,9 @@
   }
   function detectSymptom(text, data) {
     if (isInfoQuestion(text, data)) return null;
-    for (var i = 0; i < PROTOCOLS.length; i++) {
-      if (PROTOCOLS[i].keywords.some(function (k) { return text.indexOf(k) !== -1; })) return PROTOCOLS[i];
+    var list = protocolsOf(data);
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].keywords.some(function (k) { return text.indexOf(k) !== -1; })) return list[i];
     }
     return null;
   }
@@ -269,7 +265,7 @@
 
     // ② 症狀評估
     if (s.assessment) {
-      var st = s.assessment, proto = BY_KEY[st.symptom];
+      var st = s.assessment, proto = protocolByKey(data, st.symptom);
       if (has(text, ABORT)) {
         s.assessment = null; log(s, 'assessment_abort', { symptom: proto.key });
         trace.push({ step: '② 症狀評估', result: '病患中止，清除狀態' });
@@ -383,7 +379,7 @@
   var Engine = {
     screenRedFlag: screenRedFlag, detectSymptom: detectSymptom, parseSeverity: parseSeverity,
     extractCount: extractCount, retrieve: retrieve, compose: compose, createSession: createSession,
-    chat: chat, quizQuestions: quizQuestions, quizScore: quizScore, PROTOCOLS: PROTOCOLS,
+    chat: chat, quizQuestions: quizQuestions, quizScore: quizScore, protocolsOf: protocolsOf,
     MIN_SCORE: MIN_SCORE, highReply: highReply, normalizeText: normalizeText
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = Engine;

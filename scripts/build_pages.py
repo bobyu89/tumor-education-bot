@@ -162,11 +162,15 @@ def _backend():
 
 
 def export_redflag() -> dict:
-    """紅旗規則單一來源：backend/redflag.py。演示引擎讀這份，避免兩邊規則分歧。"""
+    """紅旗規則單一來源：backend/redflag.py（通用核心）＋預設科別設定檔（發燒等級、體溫門檻、擴充規則）。
+    演示引擎讀合併後的結果，避免兩邊規則分歧。"""
     _backend()
     import redflag as rf
+    profile = rf.profile_for()
+    high, medium = profile.rules()
     return {
-        "selfHarm": rf.HIGH_SELF_HARM, "high": rf.HIGH_PHYSICAL, "medium": rf.MEDIUM,
+        "selfHarm": rf.HIGH_SELF_HARM, "high": high, "medium": medium,
+        "tempHigh": profile.temp_high, "tempMedium": profile.temp_medium,
         "negCues": rf._NEG_CUES, "fillers": rf._FILLERS, "hypothetical": rf._HYPOTHETICAL,
         "ambient": rf._AMBIENT, "clauseSplit": rf._CLAUSE_SPLIT.pattern,
         "tempRe": rf._TEMP_RE.pattern, "tempCtxRe": rf._TEMP_CTX_RE.pattern,
@@ -181,10 +185,29 @@ def export_assessment_cues() -> dict:
     return {"info": assessment.INFO_CUES, "present": assessment.PRESENT_CUES}
 
 
+def export_protocols() -> list[dict]:
+    """症狀評估協定，單一來源：預設科別的 knowledge/<科別>/manifest.json。轉成演示引擎的欄位名稱。"""
+    _backend()
+    import departments
+    out = []
+    for p in departments.get().assessment:
+        d = {"key": p["key"], "name": p["name"], "keywords": p["keywords"], "onc": p.get("doc_code"),
+             "escalates": p.get("escalates", True)}
+        if p.get("field"):
+            d.update(field=p["field"], question=p.get("question"))
+        if p.get("escalate_count") is not None:
+            d["escalateCount"] = p["escalate_count"]
+        if p.get("high_count") is not None:
+            d["highCount"] = p["high_count"]
+        out.append(d)
+    return out
+
+
 def export_safety_text() -> dict:
     _backend()
+    import departments
     import safety_text
-    return safety_text.export_for_demo("若情況緊急請直接撥打 119")
+    return safety_text.export_for_demo("若情況緊急請直接撥打 119", departments.get().safety_text)
 
 
 def main():
@@ -192,7 +215,7 @@ def main():
     quiz = json.loads((ROOT / "backend" / "quiz_bank.json").read_text(encoding="utf-8"))
     data = {"leaflets": leaflets, "quiz": quiz, "patients": PATIENTS, "seed": SEED,
             "redflag": export_redflag(), "safetyText": export_safety_text(),
-            "assessmentCues": export_assessment_cues(),
+            "assessmentCues": export_assessment_cues(), "protocols": export_protocols(),
             "builtFrom": "Obsidian_Vault/衛教知識庫 + backend/quiz_bank.json + backend/redflag.py + backend/safety_text.py"}
     js = ("// 由 scripts/build_pages.py 產生，請勿手改。\n"
           "(function (root) {\n  var DEMO_DATA = " + json.dumps(data, ensure_ascii=False, indent=1) +

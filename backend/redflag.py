@@ -15,8 +15,9 @@ v2 設計（安全底線仍是確定性規則，不經 LLM）：
   3. 否定：否定詞必須「緊貼」關鍵字（中間最多夾「有／再／什麼／很／太…」等填充字），
      例：「沒有胸痛」「沒什麼發燒」「不會喘」被否定；「沒睡好今天胸痛」不被否定。
   4. 假設／預防語境：同一子句內關鍵字前出現「如果／萬一／預防／避免…」→ 不觸發。
-  5. 體溫數值判讀：≥38.0°C → HIGH（對齊 ONC-22「發燒超過 38°C 含以上」、
-     ONC-25「發燒不可自行吃退燒藥，必須就醫」）；37.5–37.9 → MEDIUM。
+  5. 體溫數值判讀：門檻依科別設定（knowledge/<科別>/manifest.json）。血液腫瘤科 ≥38.0°C → HIGH
+     （對齊 ONC-22「發燒超過 38°C 含以上」、ONC-25「發燒不可自行吃退燒藥」）、37.5–37.9 → MEDIUM。
+  8. 規則分兩層：通用核心（所有科別）＋科別擴充（發燒等級、體溫門檻、額外規則），見 RedFlagProfile。
   6. 自傷類一律不套否定與假設（寧可誤報，不可漏接），但移除語意過寬的詞。
   7. 向量補充只加分不減分；載入失敗時關鍵字底線仍在。
 
@@ -45,13 +46,18 @@ HIGH_SELF_HARM = [
     "想欲死", "我欲死", "毋想活", "袂活落去",
 ]
 
-HIGH_PHYSICAL: list[tuple[str, str]] = [
-    # 發燒／感染（febrile neutropenia）
+# 發燒／感染詞：嚴重度由科別決定（RedFlagProfile.fever_level）。
+# 化療科別（白血球低下期發燒可能是 febrile neutropenia）設 high；其他科別預設 medium。
+FEVER_TERMS: list[tuple[str, str]] = [
     ("fever", "發燒"), ("fever", "高燒"), ("fever", "燒到"), ("fever", "有燒"),
     ("fever", "燒起來"), ("fever", "燒燒"), ("fever", "畏寒"),
     ("fever", "寒顫"), ("fever", "發冷"), ("fever", "冷到發抖"), ("fever", "打冷顫"),
     ("fever", "退燒藥"),
     ("fever", "re:人工血管.{0,6}(紅腫|流膿).{0,6}(燒|熱)"),
+]
+
+# 通用核心：所有科別都適用的急症
+HIGH_PHYSICAL: list[tuple[str, str]] = [
     # 心肺
     ("cardiorespiratory", "胸痛"), ("cardiorespiratory", "胸悶"),
     ("cardiorespiratory", "胸口痛"), ("cardiorespiratory", "胸口悶"),
@@ -122,6 +128,49 @@ _ZH_TEMP_RE = re.compile(r"(四十[一二]?|三十[七八九])度?(半|點五)?"
 _ZH_NUM = {"三十七": 37, "三十八": 38, "三十九": 39, "四十": 40, "四十一": 41, "四十二": 42}
 
 _SEVERITY_ORDER = {"none": 0, "medium": 1, "high": 2}
+
+
+@dataclass(frozen=True)
+class RedFlagProfile:
+    """科別的紅旗設定（來自 knowledge/<科別>/manifest.json 的 redflag 區塊）。
+
+    fever_level  發燒詞的嚴重度：high | medium
+    temp_high    體溫 ≥ 此值判 HIGH；None = 體溫不會單獨判 HIGH
+    temp_medium  體溫 ≥ 此值判 MEDIUM；None = 不判
+    extra_high / extra_medium  科別專屬規則，格式同 HIGH_PHYSICAL：[[類別, 關鍵字或 re:樣式], …]
+    """
+    fever_level: str = "medium"
+    temp_high: float | None = None
+    temp_medium: float | None = 38.0
+    extra_high: tuple = ()
+    extra_medium: tuple = ()
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "RedFlagProfile":
+        d = d or {}
+        level = d.get("fever_level", "medium")
+        if level not in ("high", "medium"):
+            raise ValueError(f"redflag.fever_level 只能是 high 或 medium：{level}")
+        return cls(fever_level=level, temp_high=d.get("temp_high"), temp_medium=d.get("temp_medium", 38.0),
+                   extra_high=tuple(tuple(r) for r in d.get("extra_high", [])),
+                   extra_medium=tuple(tuple(r) for r in d.get("extra_medium", [])))
+
+    def rules(self) -> tuple[list, list]:
+        """合併後的 (HIGH 規則, MEDIUM 規則)：通用核心＋發燒詞（依等級）＋科別擴充。"""
+        high = list(HIGH_PHYSICAL) + [tuple(r) for r in self.extra_high]
+        medium = list(MEDIUM) + [tuple(r) for r in self.extra_medium]
+        (high if self.fever_level == "high" else medium)[:0] = FEVER_TERMS
+        return high, medium
+
+
+# 通用預設（未指定科別、也讀不到科別設定時）：發燒為 MEDIUM，體溫 ≥38 為 MEDIUM
+CORE_PROFILE = RedFlagProfile()
+
+
+def profile_for(dept_id: str | None = None) -> RedFlagProfile:
+    """依科別取得紅旗設定；未指定時用預設科別。"""
+    import departments
+    return RedFlagProfile.from_dict(departments.get(dept_id).redflag)
 
 
 @dataclass
@@ -207,7 +256,7 @@ def parse_temperature(clause: str) -> float | None:
     return max(vals) if vals else None
 
 
-def _temperature_screen(clause_list: list[str]) -> tuple[str, str] | None:
+def _temperature_screen(clause_list: list[str], profile: RedFlagProfile) -> tuple[str, str] | None:
     best = None
     for cl in clause_list:
         t = parse_temperature(cl)
@@ -223,15 +272,17 @@ def _temperature_screen(clause_list: list[str]) -> tuple[str, str] | None:
             best = t
     if best is None:
         return None
-    if best >= 38.0:
+    if profile.temp_high is not None and best >= profile.temp_high:
         return ("high", f"體溫{best:g}°C")
-    if best >= 37.5:
+    if profile.temp_medium is not None and best >= profile.temp_medium:
         return ("medium", f"體溫{best:g}°C")
     return None
 
 
 # ── 關鍵字層 ──────────────────────────────────────────────────────
-def _keyword_screen(text: str) -> RedFlagResult:
+def _keyword_screen(text: str, profile: RedFlagProfile | None = None) -> RedFlagResult:
+    profile = profile or profile_for()
+    high_rules, medium_rules = profile.rules()
     norm = normalize(text)
     cl = clauses(norm)
 
@@ -240,15 +291,15 @@ def _keyword_screen(text: str) -> RedFlagResult:
     if self_harm:
         return RedFlagResult(True, "high", self_harm, "keyword", "self_harm")
 
-    temp = _temperature_screen(cl)
-    high = _match_rules(cl, HIGH_PHYSICAL)
+    temp = _temperature_screen(cl, profile)
+    high = _match_rules(cl, high_rules)
     if temp and temp[0] == "high":
         high.insert(0, ("fever", temp[1]))
     if high:
         terms = list(dict.fromkeys(t for _, t in high))
         return RedFlagResult(True, "high", terms, "keyword", high[0][0])
 
-    med = _match_rules(cl, MEDIUM)
+    med = _match_rules(cl, medium_rules)
     if temp and temp[0] == "medium":
         med.insert(0, ("fever", temp[1]))
     if med:
@@ -314,9 +365,10 @@ def _vector_screen(text: str) -> RedFlagResult | None:
 
 
 # ── 主入口 ────────────────────────────────────────────────────────
-def screen(text: str, use_vector: bool = True) -> RedFlagResult:
-    """關鍵字為底；未命中 HIGH 且啟用向量時，用向量補一層。取較嚴重者。"""
-    kw = _keyword_screen(text)
+def screen(text: str, use_vector: bool = True, dept: str | None = None) -> RedFlagResult:
+    """關鍵字為底；未命中 HIGH 且啟用向量時，用向量補一層。取較嚴重者。
+    dept：病患所屬科別（決定發燒等級、體溫門檻與科別擴充規則）；未指定用預設科別。"""
+    kw = _keyword_screen(text, profile_for(dept))
     if kw.severity == "high" or not use_vector:
         return kw
     vec = _vector_screen(text)

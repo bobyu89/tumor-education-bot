@@ -81,6 +81,11 @@ cd backend && python -X utf8 -m uvicorn main:app --port 8000
 # 6. 瀏覽器開 http://localhost:8000
 ```
 
+### 多科別
+
+知識庫依科別分開：`knowledge/<科別>/manifest.json` 指定單張來源、緊急電話、紅旗擴充規則與症狀評估協定，
+病患綁定科別後，檢索、紅旗與評估都依科別進行。新增科別不需改程式，見 [`docs/knowledge/新增科別說明.md`](docs/knowledge/新增科別說明.md)。
+
 ### 正式部署（Docker）
 
 `docker compose --profile https up -d --build`：FastAPI＋Caddy（自動 HTTPS），資料、索引與模型放在 volume，
@@ -119,6 +124,7 @@ python -X utf8 test_redflag.py       # 紅旗 v2 回歸測試集（redflag_cases
 python -X utf8 test_alerts.py        # 警示送達紀錄、未確認清單與確認、病患端安全文字
 python -X utf8 test_llm_claude.py    # Claude Sonnet 5.5 / Opus 5.5 串接（不呼叫 API）
 python -X utf8 test_kb_update.py     # 知識庫同步（改版／停用單張）、引用核對、單張版本紀錄
+python -X utf8 test_departments.py   # 多科別：設定檔、紅旗核心＋擴充、評估協定、依科別檢索
 python -X utf8 test_phase1.py        # 地基單元測試（db/auth/redflag/quality）
 python -X utf8 test_phase2.py        # 症狀追問
 python -X utf8 test_phase3.py        # 研究統計與匯出

@@ -195,7 +195,7 @@
   var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); };
   var fmt = function (iso) { var d = new Date(iso); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
   var ago = function (days, h) { var d = new Date(); d.setDate(d.getDate() - days); d.setHours(h || 10, 0, 0, 0); return d.toISOString(); };
-  var SYM = {}; E.PROTOCOLS.forEach(function (p) { SYM[p.key] = p.name; });
+  var SYM = {}; E.protocolsOf(D).forEach(function (p) { SYM[p.key] = p.name; });
   var QUALITY_ORDER = ['grounded', 'assessment', 'assessment_escalated', 'deflected_no_source', 'deflected_off_source', 'redflag_shortcut'];
 
   var SCENARIOS = [

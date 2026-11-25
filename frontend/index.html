@@ -761,6 +761,7 @@
           <summary>＋ 新增病患</summary>
           <div class="admin-grid">
             <input id="np-code" placeholder="代號 P012" maxlength="7">
+            <select id="np-dept" title="科別：決定知識庫範圍、紅旗設定與緊急電話"><option value="">科別（預設）</option></select>
             <input id="np-cancer" placeholder="癌別">
             <input id="np-age" type="number" min="0" max="120" placeholder="年齡">
             <select id="np-gender"><option value="">性別</option><option>男</option><option>女</option><option>其他</option></select>
@@ -1278,15 +1279,30 @@ async function showStaffAudit() {
 }
 
 // ── 管理者：病患與 LINE 通行碼 ──
+let DEPT_NAMES = {};
+
+// 科別清單（knowledge/*/manifest.json）：建立病患時選擇，病患清單顯示科別名稱
+async function loadDepartments() {
+  try {
+    const list = await (await apiFetch('/departments')).json();
+    DEPT_NAMES = Object.fromEntries(list.map(d => [d.id, d.name]));
+    const sel = document.getElementById('np-dept');
+    sel.innerHTML = list.map(d =>
+      `<option value="${escHtml(d.id)}"${d.default ? ' selected' : ''}>${escHtml(d.name)}</option>`).join('');
+  } catch { /* 保留「科別（預設）」 */ }
+}
+
 async function loadAdminPatients() {
   const box = document.getElementById('admin-patients');
+  if (!Object.keys(DEPT_NAMES).length) await loadDepartments();
   try {
     const list = await (await apiFetch('/admin/patients')).json();
     if (!list.length) { box.textContent = '尚無病患，請先新增'; return; }
     box.innerHTML = list.map(p => {
       const status = p.bound_at ? '🟢 已綁定 LINE'
                    : p.pending_code_expires_at ? '🟡 已發碼，待病患輸入' : '⚪ 未綁定';
-      const meta = [p.cancer_type, p.age && `${p.age} 歲`, p.gender].filter(Boolean).join('・');
+      const meta = [DEPT_NAMES[p.department] || p.department, p.cancer_type, p.age && `${p.age} 歲`, p.gender]
+                   .filter(Boolean).join('・');
       return `<div class="adm-row">
           <div><b>${escHtml(p.pseudonym)}</b> <span class="adm-meta">${escHtml(meta)}</span>
                <div class="adm-meta">${status}</div></div>
@@ -1325,6 +1341,7 @@ async function createPatient() {
   const val = id => document.getElementById(id).value.trim();
   const body = {
     pseudonym: val('np-code').toUpperCase(),
+    department: val('np-dept') || null,
     cancer_type: val('np-cancer') || null,
     age: val('np-age') ? Number(val('np-age')) : null,
     gender: val('np-gender') || null,

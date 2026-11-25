@@ -15,15 +15,16 @@
 """
 from __future__ import annotations
 
-# 依紅旗類別的第一句（內容依據衛教單張）
+# 依紅旗類別的第一句（通用版）。各科別可在 knowledge/<科別>/manifest.json 的 safety_text 覆寫，
+# 例如血液腫瘤科的發燒會引用單張 ONC-25。
 CATEGORY_LEAD = {
-    "fever": "化療期間發燒，可能是嚴重感染的警訊，請不要自行吃退燒藥（衛教單張 ONC-25），需要盡快就醫。",
-    "bleeding": "出血的情形需要立即處理（衛教單張 ONC-18），請盡快就醫。",
+    "fever": "發燒可能是感染的警訊，需要盡快就醫。",
+    "bleeding": "出血的情形需要立即處理，請盡快就醫。",
     "cardiorespiratory": "胸痛、胸悶或呼吸困難需要立即處理。",
     "neuro": "這個狀況可能是神經方面的急症，需要立即處理。",
     "dehydration": "沒有尿、喝不下水或一直吐瀉，可能已經脫水，需要盡快就醫。",
     "allergy": "臉、嘴唇或喉嚨腫、全身起疹子，可能是嚴重過敏反應，需要立即處理。",
-    "injury": "化療期間血小板可能偏低，跌倒撞到頭或受傷需要盡快檢查。",
+    "injury": "跌倒撞到頭或受傷需要盡快檢查。",
 }
 DEFAULT_LEAD = "這個狀況需要立即處理。"
 
@@ -35,12 +36,12 @@ SELF_HARM_LEAD = ("謝謝您願意告訴我，聽起來您現在真的很辛苦�
 LINE_NOT_MONITORED = "這裡不是 24 小時有醫護人員即時監看，系統會記錄並提醒醫療團隊，但請不要等待這裡的回覆。"
 
 
-def emergency_reply(channel: str, category: str, contact: str) -> str:
-    """HIGH 紅旗的固定回覆。"""
+def emergency_reply(channel: str, category: str, contact: str, overrides: dict | None = None) -> str:
+    """HIGH 紅旗的固定回覆。overrides：科別設定檔的 safety_text（依類別覆寫第一句；自傷不可覆寫）。"""
     if category == "self_harm":
         lead = SELF_HARM_LEAD
     else:
-        lead = CATEGORY_LEAD.get(category, DEFAULT_LEAD)
+        lead = (overrides or {}).get(category) or CATEGORY_LEAD.get(category, DEFAULT_LEAD)
     if channel == "line":
         return f"{lead}\n{contact}。\n{LINE_NOT_MONITORED}"
     return f"{lead}\n請立刻按呼叫鈴讓護理師知道（系統也會提醒護理站，但請以呼叫鈴為主）。"
@@ -81,11 +82,11 @@ def safety_rule_for_prompt(channel: str, contact: str) -> str:
     return action
 
 
-def export_for_demo(contact: str) -> dict:
+def export_for_demo(contact: str, overrides: dict | None = None) -> dict:
     """給 scripts/build_pages.py：演示頁（網頁情境）用的同一份文字。"""
     cats = list(CATEGORY_LEAD) + ["self_harm", "other"]
     return {
-        "emergency": {c: emergency_reply("web", c, contact) for c in cats},
+        "emergency": {c: emergency_reply("web", c, contact, overrides) for c in cats},
         "deflect": deflect_reply("web", contact),
         "escalation_suffix_web": "我已經幫您記錄並提醒護理站，請按呼叫鈴讓護理師知道。",
         "escalation_high_note": "這個程度需要盡快就醫。",

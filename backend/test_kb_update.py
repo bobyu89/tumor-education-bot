@@ -136,7 +136,7 @@ import stats
 check("研究匯出包含單張版本欄位", "rag_doc_versions" in stats.export_csv("messages").splitlines()[0])
 with db.get_conn() as conn:
     v = conn.execute("SELECT MAX(version) v FROM schema_version").fetchone()["v"]
-check("資料庫 schema 升到 v4", v == 4)
+check("資料庫 schema 至少 v4", v >= 4)
 rag.retriever.query, rag.retriever.known_codes = _orig_q, _orig_k
 llm_client._client = None
 db.DB_PATH.unlink(missing_ok=True)

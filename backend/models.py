@@ -14,6 +14,7 @@ class PatientProfile(BaseModel):
     medications: Optional[list[str]] = []
     education_level: str = "general"   # simple | general | detailed
     language: str = "zh-TW"
+    department: Optional[str] = None   # 科別代號；None = 預設科別
 
 
 class LoginRequest(BaseModel):
@@ -38,6 +39,7 @@ class PatientCreate(BaseModel):
     age: Optional[int] = None
     gender: Optional[str] = None
     education_level: str = "general"     # simple | general | detailed
+    department: Optional[str] = None     # 科別代號（GET /departments）；省略 = 預設科別
 
 
 class ChatResponse(BaseModel):

@@ -25,6 +25,8 @@ RUN --mount=type=secret,id=ca_bundle,required=false \
 COPY backend/ backend/
 COPY frontend/ frontend/
 COPY scripts/index_vault.py scripts/index_vault.py
+# 科別設定檔與各科單張（新增科別時，若單張不在 Obsidian_Vault/衛教知識庫，記得在這裡加一行 COPY）
+COPY knowledge/ knowledge/
 COPY Obsidian_Vault/衛教知識庫/ Obsidian_Vault/衛教知識庫/
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
 

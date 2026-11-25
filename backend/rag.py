@@ -9,6 +9,8 @@
   兩者都相容（get 時同時嘗試）。
 """
 from embedding import make_embedding_function
+import logging
+
 import chromadb
 from config import settings
 
@@ -28,9 +30,20 @@ class RAGRetriever:
                 embedding_function=self.embedding_fn,
                 metadata={"hnsw:space": "cosine"},
             )
+        self._warn_if_untagged()
+
+    def _warn_if_untagged(self):
+        """舊版索引的段落沒有科別標記，依科別檢索會查不到任何東西 —— 啟動時提醒同步。"""
+        if self.collection.count() == 0:
+            return
+        sample = self.collection.get(limit=20, include=["metadatas"])["metadatas"]
+        if any(not (m or {}).get("dept") for m in sample):
+            logging.warning("[rag] 向量索引缺少科別標記（舊版索引）。請執行 python -X utf8 scripts/index_vault.py 同步，"
+                            "否則依科別檢索會查不到資料。Docker 版啟動時會自動同步。")
 
     def query(self, query_text: str, n_results: int = None,
-              category_filter: str = None, code_filter: str = None) -> list[dict]:
+              category_filter: str = None, code_filter: str = None,
+              dept: str | None = None) -> list[dict]:
         """語意檢索。code_filter（如 "ONC-22"）可把檢索限制在單一衛教單張，
         供症狀評估後的衛教使用：症狀 → 對應單張是確定的，不該靠語意猜。"""
         k = n_results or settings.RAG_TOP_K
@@ -41,6 +54,8 @@ class RAGRetriever:
         k = min(k, total)
         # 新舊 metadata 皆支援分類過濾；code 只有新 index（index_vault.py）才有
         conds = []
+        if dept:
+            conds.append({"dept": dept})          # 只檢索病患所屬科別的單張
         if category_filter:
             conds.append({"category": category_filter})
         if code_filter:
@@ -80,7 +95,8 @@ class RAGRetriever:
         return output
 
     def known_codes(self) -> frozenset[str]:
-        """知識庫中所有單張代碼（引用核對用：不假設代碼格式，換科別或新增單張時自動生效）。
+        """知識庫中所有科別的單張代碼（引用核對用：不假設代碼格式，新增科別或單張時自動生效）。
+        引用其他科別的單張同樣算 citation_mismatch，因為那份單張沒有提供給模型。
         每次呼叫讀一次集合 metadata；單張數量級在數千段以內，成本可忽略，且保證與索引同步。"""
         if self.collection.count() == 0:
             return frozenset()

@@ -1,0 +1,152 @@
+{
+  "_說明": "血液腫瘤科（化學治療病患）。新增科別請參考 docs/knowledge/新增科別說明.md。",
+  "id": "hemato-oncology",
+  "name": "血液腫瘤科",
+  "source_dir": "Obsidian_Vault/衛教知識庫",
+  "emergency_contact": "",
+  "redflag": {
+    "_說明": "化療後白血球低下期間發燒可能是 febrile neutropenia（Taplitz et al., 2018），故發燒升為 HIGH；體溫門檻對齊單張 ONC-22、ONC-25。",
+    "fever_level": "high",
+    "temp_high": 38.0,
+    "temp_medium": 37.5,
+    "extra_high": [],
+    "extra_medium": []
+  },
+  "safety_text": {
+    "fever": "化療期間發燒，可能是嚴重感染的警訊，請不要自行吃退燒藥（衛教單張 ONC-25），需要盡快就醫。",
+    "bleeding": "出血的情形需要立即處理（衛教單張 ONC-18），請盡快就醫。",
+    "injury": "化療期間血小板可能偏低，跌倒撞到頭或受傷需要盡快檢查。"
+  },
+  "assessment": [
+    {
+      "key": "nausea",
+      "name": "噁心嘔吐",
+      "keywords": [
+        "想吐",
+        "噁心",
+        "嘔吐",
+        "反胃",
+        "吐了"
+      ],
+      "doc_code": "ONC-21",
+      "field": "count",
+      "question": "這一天下來大概吐了幾次呢？（請給個數字）",
+      "escalate_count": 5,
+      "high_count": 6,
+      "_依據": "CTCAE v5.0 vomiting grade 3：24 小時內 ≥6 次 → HIGH"
+    },
+    {
+      "key": "diarrhea",
+      "name": "腹瀉",
+      "keywords": [
+        "拉肚子",
+        "腹瀉",
+        "一直拉",
+        "水便"
+      ],
+      "doc_code": "ONC-22",
+      "field": "count",
+      "question": "今天大概拉了幾次呢？（請給個數字）",
+      "escalate_count": 6,
+      "high_count": 7,
+      "_依據": "CTCAE v5.0 diarrhea grade 3：較平常增加 ≥7 次／天 → HIGH"
+    },
+    {
+      "key": "constipation",
+      "name": "便祕",
+      "keywords": [
+        "便祕",
+        "便秘",
+        "大不出來",
+        "解不出來",
+        "沒排便"
+      ],
+      "doc_code": "ONC-23",
+      "field": "days",
+      "question": "已經幾天沒有排便了呢？（請給個數字）",
+      "escalate_count": 3
+    },
+    {
+      "key": "mucositis",
+      "name": "口腔黏膜炎",
+      "keywords": [
+        "嘴巴破",
+        "口腔破",
+        "口腔潰瘍",
+        "嘴破",
+        "黏膜"
+      ],
+      "doc_code": "ONC-17"
+    },
+    {
+      "key": "neuropathy",
+      "name": "手腳麻木刺痛",
+      "keywords": [
+        "手麻",
+        "腳麻",
+        "手腳麻",
+        "刺痛",
+        "麻木"
+      ],
+      "doc_code": "ONC-38"
+    },
+    {
+      "key": "fatigue",
+      "name": "疲憊",
+      "keywords": [
+        "很累",
+        "疲憊",
+        "沒力氣",
+        "沒體力",
+        "累到"
+      ],
+      "doc_code": "ONC-37"
+    },
+    {
+      "key": "appetite",
+      "name": "食慾不振",
+      "keywords": [
+        "吃不下",
+        "沒胃口",
+        "沒食慾",
+        "不想吃"
+      ],
+      "doc_code": "ONC-21"
+    },
+    {
+      "key": "rash",
+      "name": "皮膚紅疹",
+      "keywords": [
+        "紅疹",
+        "起疹子",
+        "皮膚癢",
+        "長疹子",
+        "皮膚紅"
+      ],
+      "doc_code": "ONC-40"
+    },
+    {
+      "key": "hair_loss",
+      "name": "落髮",
+      "keywords": [
+        "掉髮",
+        "落髮",
+        "頭髮掉",
+        "頭髮一直掉"
+      ],
+      "doc_code": "ONC-24",
+      "escalates": false
+    },
+    {
+      "key": "pain",
+      "name": "疼痛",
+      "keywords": [
+        "好痛",
+        "很痛",
+        "疼痛",
+        "在痛",
+        "痛得"
+      ]
+    }
+  ]
+}

@@ -1959,6 +1959,8 @@
     "吞不下"
    ]
   ],
+  "tempHigh": 38.0,
+  "tempMedium": 37.5,
   "negCues": [
    "沒有",
    "並沒有",
@@ -2073,6 +2075,146 @@
    "正在"
   ]
  },
+ "protocols": [
+  {
+   "key": "nausea",
+   "name": "噁心嘔吐",
+   "keywords": [
+    "想吐",
+    "噁心",
+    "嘔吐",
+    "反胃",
+    "吐了"
+   ],
+   "onc": "ONC-21",
+   "escalates": true,
+   "field": "count",
+   "question": "這一天下來大概吐了幾次呢？（請給個數字）",
+   "escalateCount": 5,
+   "highCount": 6
+  },
+  {
+   "key": "diarrhea",
+   "name": "腹瀉",
+   "keywords": [
+    "拉肚子",
+    "腹瀉",
+    "一直拉",
+    "水便"
+   ],
+   "onc": "ONC-22",
+   "escalates": true,
+   "field": "count",
+   "question": "今天大概拉了幾次呢？（請給個數字）",
+   "escalateCount": 6,
+   "highCount": 7
+  },
+  {
+   "key": "constipation",
+   "name": "便祕",
+   "keywords": [
+    "便祕",
+    "便秘",
+    "大不出來",
+    "解不出來",
+    "沒排便"
+   ],
+   "onc": "ONC-23",
+   "escalates": true,
+   "field": "days",
+   "question": "已經幾天沒有排便了呢？（請給個數字）",
+   "escalateCount": 3
+  },
+  {
+   "key": "mucositis",
+   "name": "口腔黏膜炎",
+   "keywords": [
+    "嘴巴破",
+    "口腔破",
+    "口腔潰瘍",
+    "嘴破",
+    "黏膜"
+   ],
+   "onc": "ONC-17",
+   "escalates": true
+  },
+  {
+   "key": "neuropathy",
+   "name": "手腳麻木刺痛",
+   "keywords": [
+    "手麻",
+    "腳麻",
+    "手腳麻",
+    "刺痛",
+    "麻木"
+   ],
+   "onc": "ONC-38",
+   "escalates": true
+  },
+  {
+   "key": "fatigue",
+   "name": "疲憊",
+   "keywords": [
+    "很累",
+    "疲憊",
+    "沒力氣",
+    "沒體力",
+    "累到"
+   ],
+   "onc": "ONC-37",
+   "escalates": true
+  },
+  {
+   "key": "appetite",
+   "name": "食慾不振",
+   "keywords": [
+    "吃不下",
+    "沒胃口",
+    "沒食慾",
+    "不想吃"
+   ],
+   "onc": "ONC-21",
+   "escalates": true
+  },
+  {
+   "key": "rash",
+   "name": "皮膚紅疹",
+   "keywords": [
+    "紅疹",
+    "起疹子",
+    "皮膚癢",
+    "長疹子",
+    "皮膚紅"
+   ],
+   "onc": "ONC-40",
+   "escalates": true
+  },
+  {
+   "key": "hair_loss",
+   "name": "落髮",
+   "keywords": [
+    "掉髮",
+    "落髮",
+    "頭髮掉",
+    "頭髮一直掉"
+   ],
+   "onc": "ONC-24",
+   "escalates": false
+  },
+  {
+   "key": "pain",
+   "name": "疼痛",
+   "keywords": [
+    "好痛",
+    "很痛",
+    "疼痛",
+    "在痛",
+    "痛得"
+   ],
+   "onc": null,
+   "escalates": true
+  }
+ ],
  "builtFrom": "Obsidian_Vault/衛教知識庫 + backend/quiz_bank.json + backend/redflag.py + backend/safety_text.py"
 };
   if (typeof module !== 'undefined' && module.exports) module.exports = DEMO_DATA;

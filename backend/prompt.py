@@ -55,10 +55,11 @@ SAFETY_BOUNDARY = """
 """
 
 
-def safety_boundary(channel: str = "web") -> str:
+def safety_boundary(channel: str = "web", emergency_contact: str | None = None) -> str:
     from config import settings
     from safety_text import safety_rule_for_prompt
-    return SAFETY_BOUNDARY.format(action=safety_rule_for_prompt(channel, settings.EMERGENCY_CONTACT))
+    contact = emergency_contact or settings.EMERGENCY_CONTACT
+    return SAFETY_BOUNDARY.format(action=safety_rule_for_prompt(channel, contact))
 
 # ── 依據規則（2026-11 同儕審查：v1 寫「請優先參考」，等於允許模型用自己的訓練知識補充）──
 # 無法回答時輸出固定標記，由 quality.classify 偵測、chat_service 改成固定轉介文字（不由模型自行措辭）。
@@ -82,6 +83,7 @@ def build_prompt(
     rag_docs: list[dict],
     output_format: str = "text",  # "text" | "bullet" | "card_json"
     channel: str = "web",         # "web"（住院，有呼叫鈴）| "line"（居家）
+    emergency_contact: str | None = None,   # 病患科別的緊急聯絡指引；None = .env 的 EMERGENCY_CONTACT
 ) -> str:
 
     # 1. 選擇語氣
@@ -105,7 +107,7 @@ def build_prompt(
     format_instruction = _get_format_instruction(output_format)
 
     # 4. 組合完整 prompt（Safety Boundary 永遠在最前面）
-    prompt = f"""{safety_boundary(channel)}
+    prompt = f"""{safety_boundary(channel, emergency_contact)}
 {tone_instruction}
 ── 病患資訊 ──
 {patient_info}

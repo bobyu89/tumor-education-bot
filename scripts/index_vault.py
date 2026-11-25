@@ -28,7 +28,10 @@ from pathlib import Path
 
 # ── 設定 ──────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
-VAULT_DIR = ROOT / "Obsidian_Vault" / "衛教知識庫"
+sys.path.insert(0, str(ROOT / "backend"))
+import departments  # noqa: E402  科別註冊表（只用標準函式庫）
+
+VAULT_DIR = ROOT / "Obsidian_Vault" / "衛教知識庫"   # 血液腫瘤科單張；各科來源以 manifest 的 source_dir 為準
 CHROMA_PATH = ROOT / "chroma_db"
 COLLECTION_NAME = "patient_education"
 EMBED_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
@@ -63,6 +66,7 @@ class Chunk:
     section: str
     source: str
     doc_version: str
+    dept: str = ""
 
 
 # ── Frontmatter 解析（不依賴 PyYAML）────────────────────────────────
@@ -154,7 +158,9 @@ def chunk_section(name: str, content: str, fits) -> list[str]:
     切割優先序：段落（空行）→ 句子（。！？；）→ 硬切。
     """
     content = clean_markdown(content)
-    if len(content) < MIN_CHUNK:
+    # 短章節整段保留：例如一句「發燒請立即就醫」的「何時通知醫護人員」章節絕不能被丟掉。
+    # （舊版把少於 MIN_CHUNK 字的整個章節直接捨棄；MIN_CHUNK 只該用在切割時避免碎片。）
+    if not content:
         return []
     if fits(content):
         return [content]
@@ -326,7 +332,7 @@ def sync_collection(col, chunks: list[Chunk], batch_size: int = 32) -> dict:
             metadatas=[{
                 "code": c.code, "topic": c.topic, "category": c.category,
                 "section": c.section, "source": c.source,
-                "doc_version": c.doc_version,
+                "doc_version": c.doc_version, "dept": c.dept,
             } for c in batch],
         )
         print(f"  嵌入 {min(i + batch_size, len(new))}/{len(new)}")
@@ -335,13 +341,24 @@ def sync_collection(col, chunks: list[Chunk], batch_size: int = 32) -> dict:
 
 # ── 主流程 ────────────────────────────────────────────────────────
 def build_chunks() -> tuple[list[Chunk], list[dict]]:
+    """所有科別（knowledge/*/manifest.json）的單張切段。同一份單張可被多個科別引用，各自帶科別標記。"""
     count_tokens = get_token_counter()
     chunks: list[Chunk] = []
     files_report: list[dict] = []
+    for dept in departments.load_all().values():
+        c, r = _build_dept_chunks(dept.id, dept.source_dir, count_tokens)
+        chunks += c
+        files_report += r
+    return chunks, files_report
 
-    md_files = sorted(VAULT_DIR.glob("*.md"))
+
+def _build_dept_chunks(dept_id: str, source_dir: Path, count_tokens) -> tuple[list[Chunk], list[dict]]:
+    chunks: list[Chunk] = []
+    files_report: list[dict] = []
+
+    md_files = sorted(source_dir.glob("*.md"))
     if not md_files:
-        sys.exit(f"找不到任何 .md：{VAULT_DIR}")
+        sys.exit(f"科別 {dept_id} 找不到任何 .md：{source_dir}")
 
     for path in md_files:
         raw = path.read_text(encoding="utf-8")
@@ -381,18 +398,21 @@ def build_chunks() -> tuple[list[Chunk], list[dict]]:
                 embed_text = prefix + text
                 # ID 含版本：單張改版（即使文字未變）也會換新 ID，舊版由 sync_collection 刪除
                 cid = hashlib.md5(
-                    f"{code}|{doc_version}|{sec_name}|{i}|{text}".encode("utf-8")
+                    f"{dept_id}|{code}|{doc_version}|{sec_name}|{i}|{text}".encode("utf-8")
                 ).hexdigest()
                 chunks.append(
                     Chunk(
                         id=cid, text=embed_text, code=code, topic=topic,
                         category=category, section=sec_name,
-                        source=source, doc_version=doc_version,
+                        source=source, doc_version=doc_version, dept=dept_id,
                     )
                 )
 
+        if len(chunks) == n_before:
+            print(f"  ⚠ {dept_id}／{path.name}：rag_index 為 true 卻沒有切出任何段落，請檢查章節格式（## 標題）")
         files_report.append({
             "file": path.name,
+            "dept": dept_id,
             "code": code,
             "topic": topic,
             "category": category,

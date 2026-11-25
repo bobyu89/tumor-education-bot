@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 4   # v2：assessment_state；v3：events.actor + LINE 通行碼綁定；v4：messages.rag_doc_versions
+SCHEMA_VERSION = 5   # v2：assessment_state；v3：events.actor + LINE 通行碼綁定；v4：messages.rag_doc_versions；v5：patients.department
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "tumor_bot.sqlite3"
 
 
@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS patients (
     diagnosis       TEXT,                     -- json array
     medications     TEXT,                     -- json array
     education_level TEXT DEFAULT 'general',
+    department      TEXT,                     -- 科別代號（knowledge/<科別>）；NULL = 預設科別
     created_at      TEXT NOT NULL
 );
 
@@ -206,6 +207,11 @@ def init_db() -> None:
         mcols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
         if "rag_doc_versions" not in mcols:
             conn.execute("ALTER TABLE messages ADD COLUMN rag_doc_versions TEXT")
+
+        # v5 遷移：病患所屬科別（決定知識庫範圍、紅旗設定、症狀評估與緊急電話）
+        pcols = {r["name"] for r in conn.execute("PRAGMA table_info(patients)")}
+        if "department" not in pcols:
+            conn.execute("ALTER TABLE patients ADD COLUMN department TEXT")
 
         row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
         if row["v"] is None or row["v"] < SCHEMA_VERSION:

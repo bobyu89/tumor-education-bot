@@ -80,8 +80,8 @@ def create_user(account: str, password: str, role: str,
             conn.execute(
                 """INSERT INTO patients
                    (user_id, pseudonym, real_name, age, gender, cancer_type,
-                    diagnosis, medications, education_level, created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    diagnosis, medications, education_level, department, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     uid, pseudonym or account,
                     patient_fields.get("real_name"),
@@ -91,6 +91,7 @@ def create_user(account: str, password: str, role: str,
                     json.dumps(patient_fields.get("diagnosis", []), ensure_ascii=False),
                     json.dumps(patient_fields.get("medications", []), ensure_ascii=False),
                     patient_fields.get("education_level", "general"),
+                    patient_fields.get("department"),
                     _now(),
                 ),
             )

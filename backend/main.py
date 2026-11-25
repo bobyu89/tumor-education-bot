@@ -20,6 +20,7 @@ import activity
 import auth
 import binding
 import db
+import departments
 import line_bot
 import quiz
 import stats
@@ -253,11 +254,21 @@ async def admin_create_patient(req: PatientCreate, user: dict = Depends(admin_us
         raise HTTPException(status_code=400, detail="代號格式需為 P 加 3–6 位數字，例如 P012")
     if binding.patient_exists(req.pseudonym):
         raise HTTPException(status_code=409, detail="此代號已存在")
+    if req.department and not departments.exists(req.department):
+        raise HTTPException(status_code=400, detail=f"未知的科別：{req.department}")
     auth.create_user(req.pseudonym, secrets.token_urlsafe(24), "patient",
                      pseudonym=req.pseudonym, created_by=user["account"],
                      cancer_type=req.cancer_type, age=req.age, gender=req.gender,
-                     education_level=req.education_level)
-    return {"pseudonym": req.pseudonym}
+                     education_level=req.education_level,
+                     department=req.department or settings.DEFAULT_DEPARTMENT)
+    return {"pseudonym": req.pseudonym, "department": req.department or settings.DEFAULT_DEPARTMENT}
+
+
+@app.get("/departments")
+async def list_departments(user: dict = Depends(staff_user)):
+    """可用科別（knowledge/*/manifest.json），供建立病患時選擇。"""
+    return [{"id": d.id, "name": d.name, "default": d.id == settings.DEFAULT_DEPARTMENT}
+            for d in departments.load_all().values()]
 
 
 @app.post("/admin/patients/{patient_code}/binding-code")

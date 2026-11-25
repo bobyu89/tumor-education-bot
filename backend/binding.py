@@ -144,7 +144,7 @@ def list_patients() -> list[dict]:
     now = _now()
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT p.pseudonym, p.cancer_type, p.age, p.gender, p.education_level,
+            """SELECT p.pseudonym, p.cancer_type, p.age, p.gender, p.education_level, p.department,
                       (SELECT bound_at FROM line_bindings b
                         WHERE b.patient_code=p.pseudonym AND b.revoked_at IS NULL
                         ORDER BY b.id DESC LIMIT 1) AS bound_at,

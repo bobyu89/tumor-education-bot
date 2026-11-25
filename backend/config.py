@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # 居家病患的緊急聯絡指引（LINE 管道使用；請與醫院確認正確號碼）
     EMERGENCY_CONTACT: str = "請立即撥打 119，或聯絡血液腫瘤科 (02) 8792-7056"
 
+    # ── 科別 ── knowledge/<科別>/manifest.json；病患未指定科別時使用
+    DEFAULT_DEPARTMENT: str = "hemato-oncology"
+
     # ── 警示確認時限（分鐘）：超過即在護理端標示「逾時」。⚠️ 預設值待臨床團隊依值班 SOP 確認 ──
     # 見 docs/ops/警示處理SOP_草案.md。系統只負責標示，不會自動打電話或升級。
     ALERT_SLA_HIGH_MIN: int = 15
@@ -70,3 +73,8 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+# 讓只用標準函式庫的模組（departments、redflag）也使用 .env 設定的預設科別
+import departments as _departments  # noqa: E402
+_departments.DEFAULT_ID = settings.DEFAULT_DEPARTMENT
