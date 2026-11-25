@@ -47,6 +47,7 @@ class ChatResponse(BaseModel):
     emergency_keywords: list[str]
     session_id: str
     timestamp: datetime
+    quick_replies: list[str] = []      # 可點選的回覆（症狀評估的 0–10 分、次數）；空 = 自由輸入
 
 
 class AlertEvent(BaseModel):

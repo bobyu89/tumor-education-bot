@@ -443,6 +443,23 @@
    "expect": "high",
    "category": "cardiorespiratory",
    "src": "演示腳本 S4；子句切分不可切斷『喘不過氣』"
+  },
+  {
+   "text": "牙齦一直流血停不下來",
+   "expect": "high",
+   "src": "v1 只靠向量層抓到；向量門檻提高到 0.85 後改由關鍵字負責",
+   "category": "bleeding"
+  },
+  {
+   "text": "手腳冰冷冒冷汗",
+   "expect": "high",
+   "src": "v1 只靠向量層抓到；向量門檻提高到 0.85 後改由關鍵字負責",
+   "category": "cardiorespiratory"
+  },
+  {
+   "text": "我手腳麻麻的",
+   "expect": "none",
+   "src": "常見症狀，不應升級（v1 向量層誤判 HIGH）"
   }
  ]
 }

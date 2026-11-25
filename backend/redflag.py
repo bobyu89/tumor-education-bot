@@ -65,6 +65,7 @@ HIGH_PHYSICAL: list[tuple[str, str]] = [
     ("cardiorespiratory", "沒辦法呼吸"), ("cardiorespiratory", "吸不到氣"),
     ("cardiorespiratory", "心跳很快"), ("cardiorespiratory", "心跳好快"),
     ("cardiorespiratory", "心悸很嚴重"), ("cardiorespiratory", "嘴唇發紫"),
+    ("cardiorespiratory", "冒冷汗"),
     # 神經
     ("neuro", "手腳無力"), ("neuro", "半邊無力"), ("neuro", "單邊無力"),
     ("neuro", "說話不清楚"), ("neuro", "講話不清楚"), ("neuro", "嘴歪"),
@@ -77,6 +78,7 @@ HIGH_PHYSICAL: list[tuple[str, str]] = [
     ("bleeding", "咳血"), ("bleeding", "黑便"), ("bleeding", "柏油"),
     ("bleeding", "re:大便.{0,3}黑"), ("bleeding", "re:便便.{0,3}黑"),
     ("bleeding", "大量血便"), ("bleeding", "一直血便"), ("bleeding", "馬桶都是血"),
+    ("bleeding", "re:流血.{0,4}停不(下來|住)"),
     # 脫水／無法進食飲水
     ("dehydration", "沒有尿"), ("dehydration", "沒尿"), ("dehydration", "尿不出來"),
     ("dehydration", "喝不下水"), ("dehydration", "喝水都吐"), ("dehydration", "吃什麼都吐"),
@@ -267,7 +269,10 @@ _VECTOR_EXEMPLARS = {
         "吐到整個人虛脫", "肚子絞痛拉個不停",
     ],
 }
-_VECTOR_THRESHOLD = 0.72    # cosine 相似度門檻（保守，避免誤報過多；尚待以驗證集校準）
+# cosine 相似度門檻。MiniLM 對中文短句普遍給出高相似度：0.72 時「我手腳麻麻的」「一直想吐」
+# 「嘴巴破了好痛」都會被升級（20 句常見症狀描述有 6 句誤報）；0.85 時為 0。
+# 原本只靠向量才抓到的急症說法（流血停不下來、冒冷汗）已改由關鍵字負責。見 test_redflag.py 的向量檢查。
+_VECTOR_THRESHOLD = 0.85
 
 _embedder = None
 _exemplar_vecs = None

@@ -113,7 +113,8 @@ async def _handle_event(event: dict) -> None:
         return
 
     resp = await process_message(patient_code, text, channel="line")
-    await send(user_id, reply_token, resp.response, private=True, urgent=resp.is_emergency)
+    await send(user_id, reply_token, resp.response, private=True, urgent=resp.is_emergency,
+               quick_replies=resp.quick_replies)
 
 
 async def _handle_unbound(user_id: str, reply_token: str, text: str) -> None:
@@ -135,23 +136,37 @@ async def _handle_unbound(user_id: str, reply_token: str, text: str) -> None:
         await send(user_id, reply_token, INVALID)
 
 
-def build_message(text: str, *, private: bool = False, urgent: bool = False) -> dict:
+QUICK_REPLY_MAX = 13      # LINE Quick Reply 最多 13 個按鈕
+QUICK_LABEL_MAX = 20      # 按鈕文字上限 20 字
+
+
+def build_message(text: str, *, private: bool = False, urgent: bool = False,
+                  quick_replies: list[str] | None = None) -> dict:
     text = text[:MAX_TEXT]
     if not private and not urgent:
-        return {"type": "text", "text": text}
-    alt = "⚠️ 請立即查看：重要提醒" if urgent else "您有一則新的衛教回覆"
-    return {
-        "type": "flex", "altText": alt,
-        "contents": {"type": "bubble", "body": {
-            "type": "box", "layout": "vertical",
-            "contents": [{"type": "text", "text": text, "wrap": True}],
-        }},
-    }
+        msg = {"type": "text", "text": text}
+    else:
+        alt = "⚠️ 請立即查看：重要提醒" if urgent else "您有一則新的衛教回覆"
+        msg = {
+            "type": "flex", "altText": alt,
+            "contents": {"type": "bubble", "body": {
+                "type": "box", "layout": "vertical",
+                "contents": [{"type": "text", "text": text, "wrap": True}],
+            }},
+        }
+    if quick_replies:
+        # 按鈕送出的文字就是按鈕上的字，與病患自己打字走同一條流程（不另開 postback 協定）
+        msg["quickReply"] = {"items": [
+            {"type": "action", "action": {"type": "message", "label": q[:QUICK_LABEL_MAX], "text": q}}
+            for q in quick_replies[:QUICK_REPLY_MAX]
+        ]}
+    return msg
 
 
 async def send(user_id: str, reply_token: str | None, text: str, *,
-               private: bool = False, urgent: bool = False) -> None:
-    msg = build_message(text, private=private, urgent=urgent)
+               private: bool = False, urgent: bool = False,
+               quick_replies: list[str] | None = None) -> None:
+    msg = build_message(text, private=private, urgent=urgent, quick_replies=quick_replies)
     if reply_token and await _post("/reply", {"replyToken": reply_token, "messages": [msg]}):
         return
     await _post("/push", {"to": user_id, "messages": [msg]})

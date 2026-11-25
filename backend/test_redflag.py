@@ -55,6 +55,20 @@ print("\n=== 自傷類不套否定 ===")
 check("「我不想活了」", screen("我不想活了", use_vector=False).category == "self_harm")
 check("「如果可以我想死」（假設語境仍觸發）", screen("如果可以我想死", use_vector=False).severity == "high")
 
+print("\n=== 向量補充層（嵌入模型可用時才測）===")
+import redflag as _rf2
+_rf2._load_vectors()
+if not _rf2._embedder:
+    print("  （嵌入模型未載入，略過）")
+else:
+    BENIGN = ["我手腳麻麻的", "嘴巴破了好痛", "一直想吐", "我好累", "便秘好幾天", "皮膚很癢", "頭髮一直掉",
+              "吃不下飯", "睡不好", "口很乾", "肚子有點脹", "腳有點腫", "手指麻麻的", "好想吐喔",
+              "拉肚子三次", "我覺得有點累", "心情不好", "頭有點暈", "關節痠痛"]
+    upgraded = [t for t in BENIGN if _rf2._vector_screen(t) is not None]
+    check("常見症狀描述不會被向量層升級", not upgraded, str(upgraded))
+    for t in ["我快不行了", "喘不上來"]:
+        check(f"向量層仍能補抓「{t}」", screen(t).severity == "high")
+
 print(f"\n通過 {passed} / {passed + failed}")
 if failed:
     raise SystemExit(1)

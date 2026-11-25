@@ -66,6 +66,19 @@ _BY_KEY = {p.key: p for p in PROTOCOLS}
 # 病患想中止評估的訊號
 _ABORT = ["先不用", "不用了", "算了", "沒事了", "不想說", "跳過", "不用問"]
 
+# 可點選的回覆：長輩不用自己打數字（2026-11 同儕審查，護理審查 minor）。
+# LINE Quick Reply 上限 13 個按鈕；最後一顆一律是「先不用了」（命中 _ABORT，可隨時中止評估）。
+STOP_CHOICE = "先不用了"
+SEVERITY_CHOICES = [str(i) for i in range(11)] + [STOP_CHOICE]
+
+
+def field_choices(proto: "Protocol") -> list[str]:
+    if proto.field_key == "count":
+        return [f"{i}次" for i in range(1, 10)] + ["10次以上", STOP_CHOICE]
+    if proto.field_key == "days":
+        return [f"{i}天" for i in range(1, 7)] + ["7天以上", STOP_CHOICE]
+    return []
+
 
 @dataclass
 class AssessmentResult:
@@ -78,6 +91,7 @@ class AssessmentResult:
     onc_code: str | None = None
     score: int | None = None
     extra: dict = dc_field(default_factory=dict)
+    choices: list[str] = dc_field(default_factory=list)   # 可點選的回覆（LINE Quick Reply／網頁按鈕）
 
 
 # ── 偵測 ──────────────────────────────────────────────────────────
@@ -172,7 +186,7 @@ def start(patient_code: str, proto: Protocol) -> AssessmentResult:
     db.log_event("assessment_start", patient_code, {"symptom": proto.key})
     q = (f"聽起來您有「{proto.name}」的不舒服，我先簡單了解一下狀況。"
          f"如果 0 分是完全不會、10 分是最嚴重，您會給幾分呢？")
-    return AssessmentResult(reply=q, symptom=proto.key)
+    return AssessmentResult(reply=q, symptom=proto.key, choices=SEVERITY_CHOICES)
 
 
 def advance(patient_code: str, state: dict, message: str) -> AssessmentResult:
@@ -195,12 +209,13 @@ def advance(patient_code: str, state: dict, message: str) -> AssessmentResult:
         if score is None:
             return AssessmentResult(
                 reply="方便用 0 到 10 的數字告訴我嗎？（0＝完全不會，10＝最嚴重）",
-                symptom=proto.key)
+                symptom=proto.key, choices=SEVERITY_CHOICES)
         data["score"] = score
         # 有特有欄位 → 續問；否則完成
         if proto.field_key:
             db.set_assessment_state(patient_code, proto.key, "ask_field", data)
-            return AssessmentResult(reply=proto.field_question, symptom=proto.key)
+            return AssessmentResult(reply=proto.field_question, symptom=proto.key,
+                                    choices=field_choices(proto))
         return _complete(patient_code, proto, data)
 
     if state["step"] == "ask_field":

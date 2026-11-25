@@ -111,15 +111,16 @@ async def process_message(pid: str, text: str, channel: Channel = "web") -> Chat
     return await _rag_answer(pid, text, flag, msg_id, channel)
 
 
-def _response(pid: str, reply: str, *, sources=None, is_emergency=False, keywords=None) -> ChatResponse:
+def _response(pid: str, reply: str, *, sources=None, is_emergency=False, keywords=None,
+              quick_replies=None) -> ChatResponse:
     return ChatResponse(response=reply, sources=sources or [], is_emergency=is_emergency,
                         emergency_keywords=keywords or [], session_id=pid,
-                        timestamp=datetime.now())
+                        timestamp=datetime.now(), quick_replies=quick_replies or [])
 
 
 def _assess_reply(pid: str, ar, flag) -> ChatResponse:
     db.add_message(pid, "bot", ar.reply, answer_quality="assessment")
-    return _response(pid, ar.reply, keywords=flag.matched_keywords)
+    return _response(pid, ar.reply, keywords=flag.matched_keywords, quick_replies=ar.choices)
 
 
 async def _escalate(pid: str, ar, msg_id: int, channel: Channel) -> ChatResponse:

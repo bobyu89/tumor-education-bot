@@ -253,6 +253,16 @@
     transition: background 0.15s;
   }
   .chip:hover { background: var(--secondary-container); }
+  /* 症狀評估的可點選回覆：按鈕放大，方便長輩點選（不必自己打數字） */
+  .answer-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px 44px; }
+  .answer-chip {
+    min-width: 44px; min-height: 44px; padding: 8px 14px;
+    border-radius: 12px; border: 1px solid var(--primary);
+    background: var(--surface-lowest); color: var(--primary);
+    font-size: 17px; font-weight: 600; cursor: pointer;
+  }
+  .answer-chip.stop { border-color: var(--outline); color: var(--outline); font-size: 14px; font-weight: 400; }
+  .answer-chip:hover { background: var(--secondary-container); }
   .input-row {
     display: flex; align-items: center; gap: 10px;
     padding: 8px 12px 16px;
@@ -607,7 +617,7 @@
 
   <div class="emergency-banner" id="emergency-banner">
     <span>⚠️</span>
-    <span id="emergency-text">偵測到緊急關鍵字，護理師已收到通知。</span>
+    <span id="emergency-text">偵測到需要注意的狀況，請按呼叫鈴讓護理師知道。</span>
   </div>
 
   <div class="typing-indicator" id="typing" style="padding: 0 16px 8px; gap:6px;">
@@ -998,6 +1008,7 @@ async function sendMessage() {
   input.value = '';
   input.style.height = 'auto';
 
+  removeAnswerChips();
   appendMessage('user', text);
   showTyping(true);
 
@@ -1013,17 +1024,42 @@ async function sendMessage() {
     const data = await res.json();
     showTyping(false);
     appendMessage('ai', data.response, data.sources);
+    if (data.quick_replies && data.quick_replies.length) appendAnswerChips(data.quick_replies);
 
     if (data.is_emergency) {
       const banner = document.getElementById('emergency-banner');
+      // 不宣稱「護理師已收到通知」：系統只能保證送出提醒，無法保證有人當下看到（2026-11 同儕審查）
       document.getElementById('emergency-text').textContent =
-        `偵測到緊急關鍵字：${data.emergency_keywords.join('、')}。護理師已收到通知，請按呼叫鈴。`;
+        `偵測到需要注意的狀況：${data.emergency_keywords.join('、')}。系統已提醒護理站，請按呼叫鈴讓護理師知道。`;
       banner.classList.add('show');
     }
   } catch (e) {
     showTyping(false);
     appendMessage('ai', '⚠️ 連線失敗，請稍後再試或通知護理師。');
   }
+}
+
+// 症狀評估的可點選回覆（0–10 分、次數）。點一下就送出，送出後按鈕移除，避免重複點選。
+function appendAnswerChips(choices) {
+  removeAnswerChips();
+  const area = document.getElementById('chat-area');
+  const row = document.createElement('div');
+  row.className = 'answer-chips';
+  row.id = 'answer-chips';
+  choices.forEach((c) => {
+    const b = document.createElement('button');
+    b.className = 'answer-chip' + (c === '先不用了' ? ' stop' : '');
+    b.textContent = c;
+    b.onclick = () => { removeAnswerChips(); quickSend(c); };
+    row.appendChild(b);
+  });
+  area.appendChild(row);
+  area.scrollTop = area.scrollHeight;
+}
+
+function removeAnswerChips() {
+  const old = document.getElementById('answer-chips');
+  if (old) old.remove();
 }
 
 function quickSend(text) {
