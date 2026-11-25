@@ -8,7 +8,7 @@
   舊 index 用 source_file / disease_category；新 index 用 source / category / code / section。
   兩者都相容（get 時同時嘗試）。
 """
-from embedding import make_embedding_function
+from embedding import get_spec, make_embedding_function
 import logging
 
 import chromadb
@@ -18,18 +18,22 @@ from config import settings
 class RAGRetriever:
     def __init__(self):
         self.client = chromadb.PersistentClient(path=settings.CHROMA_DB_PATH)
+        self.spec = get_spec()
         self.embedding_fn = make_embedding_function()
-        try:
-            self.collection = self.client.get_collection(
-                name=settings.COLLECTION_NAME,
-                embedding_function=self.embedding_fn,
-            )
-        except Exception:
-            self.collection = self.client.get_or_create_collection(
-                name=settings.COLLECTION_NAME,
-                embedding_function=self.embedding_fn,
-                metadata={"hnsw:space": "cosine"},
-            )
+        # 不把嵌入函式掛在集合上：查詢向量一律自己算（加查詢前綴），
+        # 也避免 chromadb 因集合記錄的嵌入函式與現在不同而拒絕開啟
+        self.collection = self.client.get_or_create_collection(
+            name=settings.COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine", "embed_model": self.spec.name},
+        )
+        # 用 A 模型建的索引拿 B 模型查詢，相似度沒有意義、會檢索到錯的單張。
+        # 不一致時拒絕檢索（回傳空結果 → 系統轉介，不會亂答），並大聲提醒同步。
+        self.model_mismatch = (self.collection.count() > 0
+                               and (self.collection.metadata or {}).get("embed_model") != self.spec.name)
+        if self.model_mismatch:
+            logging.error("[rag] 向量索引是用 %s 建立的，目前檢索模型是 %s —— 停止檢索。"
+                          "請執行 python -X utf8 scripts/index_vault.py 重建（Docker 版啟動時會自動處理）。",
+                          (self.collection.metadata or {}).get("embed_model", "舊版 MiniLM"), self.spec.name)
         self._warn_if_untagged()
 
     def _warn_if_untagged(self):
@@ -48,7 +52,7 @@ class RAGRetriever:
         供症狀評估後的衛教使用：症狀 → 對應單張是確定的，不該靠語意猜。"""
         k = n_results or settings.RAG_TOP_K
         total = self.collection.count()
-        if total == 0:
+        if total == 0 or self.model_mismatch:
             return []
 
         k = min(k, total)
@@ -63,7 +67,7 @@ class RAGRetriever:
         where = conds[0] if len(conds) == 1 else ({"$and": conds} if conds else None)
 
         results = self.collection.query(
-            query_texts=[query_text],
+            query_embeddings=self.embedding_fn.embed_query([query_text]),
             n_results=k,
             where=where,
             include=["documents", "metadatas", "distances"],
@@ -75,7 +79,7 @@ class RAGRetriever:
             results["metadatas"][0],
             results["distances"][0],
         ):
-            if dist < 0.8:   # cosine distance < 0.8 = 相關
+            if 1 - dist >= self.spec.min_similarity:   # 門檻依模型而定，見 embedding.MODELS
                 code = meta.get("code", "")
                 # 顯示用來源標籤：新 index 用「ONC-17 口腔黏膜炎」（frontmatter 的 source 是發行單位，
                 # 13 份全相同，不能拿來當來源標籤）；舊 index 退回 source_file。

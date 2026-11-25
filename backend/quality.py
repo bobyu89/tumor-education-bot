@@ -33,7 +33,7 @@ _DEFLECT_SIGNALS = ["請護理師", "無法回答", "沒有相關", "建議您�
 
 
 def pre_check(rag_docs: list[dict]) -> bool:
-    """是否有可用的衛教來源。rag.py 已濾掉 distance >= 0.8 的結果，故空即無來源。"""
+    """是否有可用的衛教來源。rag.py 已濾掉低於模型相似度門檻的段落，故空即無來源。"""
     return len(rag_docs) > 0
 
 

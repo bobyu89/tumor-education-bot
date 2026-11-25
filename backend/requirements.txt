@@ -9,11 +9,9 @@ anthropic>=2.14             # 正式收案：Claude Sonnet 5.5 / Opus 5.5（需�
 # ── RAG / 向量庫 ──
 chromadb>=1.0
 
-# 嵌入模型（二選一）：
-#   sentence-transformers 需要 torch；若環境封鎖 torch（如 Windows Smart App Control），
-#   backend/embedding.py 會自動改用下方 ONNX 路徑（onnxruntime + tokenizers）。
-sentence-transformers>=3.0  # 選用：torch 可用時的首選
-onnxruntime>=1.20           # fallback：不需 torch
+# 嵌入模型一律用 ONNX 推論（backend/embedding.py），不需要 torch
+#   （Windows Smart App Control 會封鎖 torch；Docker 映像也不裝）
+onnxruntime>=1.20
 tokenizers>=0.20
 numpy>=1.26
 

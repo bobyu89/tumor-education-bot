@@ -159,7 +159,15 @@ _RAG_BLOCK = re.compile(
     r"\[資料\d+｜來源：(?P<source>[^｜\]]+)｜相關度：(?P<score>[\d.]+)\]\n(?P<content>.*?)(?=\n\n\[資料|\n\n── |\Z)",
     re.S,
 )
-MOCK_MIN_SCORE = 0.45   # rag.py 只濾掉 distance ≥ 0.8（相關度 < 0.2），演示時再加一道門檻避免離題硬答
+# 演示模式（沒有真的 LLM）用相關度模擬「資料無法回答」，避免離題硬答。相似度的尺度依嵌入模型而不同：
+# e5 的分數集中在 0.8–0.9（開發集：0.86 保留 73/79 題範圍內問題、擋掉 7/15 題範圍外問題）。
+# 正式環境不靠這個門檻 —— 範圍外問題由 Claude 依 prompt 規則輸出「無法回答」標記。
+_MOCK_MIN_SCORE = {"paraphrase-multilingual-MiniLM-L12-v2": 0.45, "multilingual-e5-small": 0.86}
+
+
+def _mock_min_score() -> float:
+    from embedding import EMBED_MODEL
+    return _MOCK_MIN_SCORE.get(EMBED_MODEL, 0.0)
 
 
 class MockClient:
@@ -179,7 +187,7 @@ class MockClient:
                  model_id: str) -> LLMResult:
         docs = [(m.group("source").strip(), m.group("content").strip())
                 for m in _RAG_BLOCK.finditer(system_prompt)
-                if float(m.group("score")) >= MOCK_MIN_SCORE]
+                if float(m.group("score")) >= _mock_min_score()]
         simple = "說話像跟長輩聊天" in system_prompt      # prompt.py 的 simple 語氣模板
         n_docs, n_points = (1, 2) if simple else (2, 3)
 

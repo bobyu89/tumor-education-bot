@@ -320,7 +320,7 @@ _VECTOR_EXEMPLARS = {
         "吐到整個人虛脫", "肚子絞痛拉個不停",
     ],
 }
-# cosine 相似度門檻。MiniLM 對中文短句普遍給出高相似度：0.72 時「我手腳麻麻的」「一直想吐」
+# cosine 相似度門檻（paraphrase-multilingual-MiniLM-L12-v2，見 embedding.REDFLAG_MODEL）。MiniLM 對中文短句普遍給出高相似度：0.72 時「我手腳麻麻的」「一直想吐」
 # 「嘴巴破了好痛」都會被升級（20 句常見症狀描述有 6 句誤報）；0.85 時為 0。
 # 原本只靠向量才抓到的急症說法（流血停不下來、冒冷汗）已改由關鍵字負責。見 test_redflag.py 的向量檢查。
 _VECTOR_THRESHOLD = 0.85
@@ -335,8 +335,9 @@ def _load_vectors():
         return
     try:
         import numpy as np
-        from embedding import make_embedding_function
-        ef = make_embedding_function()
+        from embedding import REDFLAG_MODEL, make_embedding_function
+        # 固定用門檻校準時的模型，不跟著檢索模型（EMBED_MODEL）換
+        ef = make_embedding_function(REDFLAG_MODEL)
         vecs = {}
         for level, phrases in _VECTOR_EXEMPLARS.items():
             arr = np.array(ef(phrases), dtype=np.float32)

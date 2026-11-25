@@ -1,6 +1,6 @@
 # 部署（Docker）用的精簡相依：只含正式服務需要的套件。
 # 與 requirements.txt 的差異：
-#   - 不裝 sentence-transformers（會拉進 torch，映像多出數 GB）；嵌入層自動使用 ONNX 路徑
+#   - 不裝 sentence-transformers（會拉進 torch，映像多出數 GB）；嵌入層一律用 ONNX，不需要 torch
 #   - 不裝 google-genai（Google AI Studio 免費方案不可用於真實病患）
 #   - 不裝 PDF／DOCX 轉檔工具（只在本機整理知識庫時使用）
 fastapi>=0.111
