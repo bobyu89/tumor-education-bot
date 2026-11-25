@@ -169,6 +169,9 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
 
     system_prompt = build_prompt(profile, rag_docs, channel=channel)
     history = db.get_history(pid, limit=12)
+    # 病患這則訊息在流程開頭已落庫，會出現在 history 最後；query_text 又會再送一次 → 去重，避免重複
+    if history and history[-1]["role"] == "patient" and history[-1]["content"] == query_text:
+        history = history[:-1]
     model_id = settings.PRIMARY_MODEL
 
     try:
@@ -179,7 +182,7 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
         logging.error(f"[LLM Error] {e}")
         es = str(e)
         if "429" in es or "RESOURCE_EXHAUSTED" in es:
-            reply = "⚠️ 今日諮詢次數暫時用完，請明天再試。"
+            reply = "⚠️ 目前諮詢人數較多，請稍後再試。"
         elif "timeout" in es.lower():
             reply = "⚠️ 回應逾時，請重新提問。"
         else:
@@ -189,9 +192,19 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
                        provider=settings.LLM_PROVIDER, answer_quality="llm_error")
         return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
 
+    if result.refused or not result.text.strip():
+        # 模型拒答（或回傳空白）：不顯示空白，改回固定轉介文字，並進護理端待處理清單
+        reply = deflect_reply(channel, settings.EMERGENCY_CONTACT)
+        db.add_message(pid, "bot", lead + reply, rag_sources=sources,
+                       model_id=result.model_id, provider=result.provider,
+                       prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
+                       answer_quality="llm_refusal")
+        db.add_alert(pid, f"模型未回答：{query_text[:40]}", "info", msg_id, notified_channels=[])
+        return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
+
     reply = result.text
     db.add_message(pid, "bot", lead + reply, rag_sources=sources,
-                   model_id=model_id, provider=result.provider,
+                   model_id=result.model_id, provider=result.provider,
                    prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
                    answer_quality=quality.classify(reply, rag_docs))
     return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)

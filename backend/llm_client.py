@@ -1,10 +1,11 @@
 """
 LLM 供應商抽象層。
 
-目的：換模型只改一個檔 + 一個環境變數，不動 main.py。
-  現在：Gemma 3 12B（Google AI Studio，免費）
-  之後：Claude Sonnet 5（Anthropic，付費，預設不拿資料訓練）
-        —— 換 Sonnet 5 同時解掉免費 Google 方案會用病患對話訓練的 IRB 問題。
+目的：換模型只改環境變數，不動 main.py。
+  開發／演示：mock（不需 API key）或 Gemma 3 12B（Google AI Studio）
+  正式收案：Anthropic Claude Sonnet 5.5（claude-sonnet-5-5）或 Opus 5.5（claude-opus-5-5），
+            兩者擇一，由設計論文的模擬病人評估決定。
+  ⚠️ Google AI Studio 免費方案的條款允許用輸入資料改善產品，不可用於真實病患。
 
 每次呼叫回傳 LLMResult，含 model_id / provider / tokens，供 messages 表記錄，
 研究時可依 model_id 區分「哪些資料由哪個模型產生」。
@@ -13,6 +14,7 @@ LLM 供應商抽象層。
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
@@ -22,10 +24,11 @@ from config import settings
 @dataclass
 class LLMResult:
     text: str
-    model_id: str
+    model_id: str                       # 實際產生回答的模型（server-side fallback 時與請求的模型不同）
     provider: str
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    refused: bool = False               # 模型基於安全政策拒答（stop_reason == "refusal"）
 
 
 class LLMError(Exception):
@@ -72,35 +75,81 @@ class GemmaClient:
         )
 
 
-# ── Claude Sonnet 5（之後啟用）────────────────────────────────────
+# ── Claude Sonnet 5.5 / Opus 5.5（正式收案）────────────────────────
 class ClaudeClient:
+    """Anthropic Messages API。
+
+    與舊版（Sonnet 5、temperature=0.7）的差異 —— Sonnet 5.5 / Opus 5.5 的 API 規則：
+      - 不可送 temperature / top_p / top_k（會回 400）；回答的深度改用 output_config.effort 控制。
+        衛教問答不需要深度推理，預設 effort=low（LLM_EFFORT），回應較快。
+      - 兩個模型都是 adaptive thinking（Opus 5.5 無法關閉），不另外設定 thinking。
+        思考 token 也算在 max_tokens 內，所以 max_tokens 不能設太小（LLM_MAX_TOKENS）。
+      - 可能因安全政策拒答（stop_reason == "refusal"）。預設開啟 server-side fallback（fallbacks="default"），
+        由 API 改用伺服器指定的備援模型重跑；實際回答的模型記在 LLMResult.model_id（resp.model），
+        研究資料可據此區分。若 IRB 要求只能用單一模型，設 ANTHROPIC_REFUSAL_FALLBACK=false。
+        整條鏈仍拒答時回傳 refused=True，由 chat_service 改回固定轉介文字（不顯示空白）。
+    """
     provider = "anthropic"
+    FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
     def __init__(self):
         import anthropic
-        self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+        self._anthropic = anthropic
+        # 沒設 ANTHROPIC_API_KEY 時交給 SDK 依環境解析憑證（ANTHROPIC_AUTH_TOKEN、ant auth login 等）
+        kwargs = {"api_key": settings.ANTHROPIC_API_KEY} if settings.ANTHROPIC_API_KEY else {}
+        self.client = anthropic.Anthropic(timeout=settings.LLM_TIMEOUT_SEC, **kwargs)
 
-    def generate(self, system_prompt: str, history: list[dict], user_message: str,
-                 model_id: str) -> LLMResult:
-        # Claude 支援原生 system prompt（不像 Gemma 要塞進對話）
+    def build_request(self, system_prompt: str, history: list[dict], user_message: str,
+                      model_id: str) -> dict:
+        """組出 messages.create 的參數（獨立出來方便測試，不需呼叫 API）。"""
         messages = []
         for msg in history:
             role = "user" if msg["role"] in ("user", "patient") else "assistant"
             messages.append({"role": role, "content": msg["content"]})
         messages.append({"role": "user", "content": user_message})
+        req = {
+            "model": model_id,
+            "max_tokens": settings.LLM_MAX_TOKENS,
+            "system": system_prompt,
+            "messages": messages,
+            "output_config": {"effort": settings.LLM_EFFORT},
+        }
+        if settings.ANTHROPIC_REFUSAL_FALLBACK:
+            req["betas"] = [self.FALLBACK_BETA]
+            req["fallbacks"] = "default"
+        return req
+
+    def generate(self, system_prompt: str, history: list[dict], user_message: str,
+                 model_id: str) -> LLMResult:
+        a = self._anthropic
+        req = self.build_request(system_prompt, history, user_message, model_id)
+        api = self.client.beta.messages if "betas" in req else self.client.messages
         try:
-            resp = self.client.messages.create(
-                model=model_id, system=system_prompt, messages=messages,
-                max_tokens=800, temperature=0.7,
-            )
-        except Exception as e:
-            raise LLMError(str(e)) from e
+            resp = api.create(**req)
+        except a.RateLimitError as e:
+            raise LLMError(f"429 rate limited: {e}") from e
+        except a.APITimeoutError as e:
+            raise LLMError(f"timeout: {e}") from e
+        except a.APIStatusError as e:
+            raise LLMError(f"{e.status_code}: {e.message}") from e
+        except a.APIConnectionError as e:
+            raise LLMError(f"connection error: {e}") from e
+        return self.parse_response(resp, model_id)
+
+    def parse_response(self, resp, requested_model: str) -> LLMResult:
+        refused = resp.stop_reason == "refusal"
+        if refused:
+            details = getattr(resp, "stop_details", None)
+            logging.warning("[LLM] 模型拒答 category=%s request_id=%s",
+                            getattr(details, "category", None), getattr(resp, "_request_id", None))
+        text = "" if refused else "".join(b.text for b in resp.content if b.type == "text")
         return LLMResult(
-            text="".join(b.text for b in resp.content if b.type == "text"),
-            model_id=model_id,
+            text=text,
+            model_id=getattr(resp, "model", None) or requested_model,
             provider=self.provider,
             prompt_tokens=resp.usage.input_tokens,
             completion_tokens=resp.usage.output_tokens,
+            refused=refused,
         )
 
 
@@ -166,6 +215,9 @@ def get_client():
     global _client
     if _client is None:
         if settings.LLM_PROVIDER == "anthropic":
+            if not settings.PRIMARY_MODEL.startswith("claude-"):
+                raise LLMError(f"LLM_PROVIDER=anthropic 但 PRIMARY_MODEL={settings.PRIMARY_MODEL!r}；"
+                               "請在 .env 設 PRIMARY_MODEL=claude-sonnet-5-5 或 claude-opus-5-5")
             _client = ClaudeClient()
         elif settings.LLM_PROVIDER == "mock":
             _client = MockClient()

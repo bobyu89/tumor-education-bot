@@ -5,7 +5,9 @@
 
 - 病患資料存於 SQLite（`backend/db.py`），身分與研究資料分表（去識別化）。**含病患資料的檔案（`.env`、`data/*.sqlite3`、`chroma_db/`、`models/`）絕不進版控。**
 - 嵌入層 `backend/embedding.py` 在 torch 被封鎖時自動退回 ONNX（本機 Windows Smart App Control 會擋 torch）。
-- 測試不需 API key：`cd backend && python -X utf8 test_phase1.py`、`test_phase2.py`、`test_phase3.py`、`test_quiz.py`、`test_integration.py`、`test_redflag.py`、`test_alerts.py`；演示引擎 `node scripts/test_pages_engine.js`。
+- 測試不需 API key：`cd backend && python -X utf8 test_phase1.py`、`test_phase2.py`、`test_phase3.py`、`test_quiz.py`、`test_integration.py`、`test_redflag.py`、`test_alerts.py`、`test_llm_claude.py`；演示引擎 `node scripts/test_pages_engine.js`。
+- 正式收案 LLM 為 Anthropic Claude Sonnet 5.5 或 Opus 5.5（`LLM_PROVIDER=anthropic`）；這兩個模型不接受 `temperature`，以 `LLM_EFFORT` 控制。
+- 衛教知識庫以院內現行 13 份單張為準，不修改單張內容；範圍外問題由系統轉介。
 - 紅旗規則單一來源是 `backend/redflag.py`，病患端安全文字是 `backend/safety_text.py`；改了要跑 `python -X utf8 scripts/build_pages.py` 重建 `docs/demo_data.js`（演示引擎直接讀匯出的規則）。
 - 演示不需 API key：`.env` 設 `LLM_PROVIDER=mock`；`scripts/seed_demo.py --reset` 植入模擬病患，`scripts/demo_dry_run.py` 彩排 9 個情境；腳本在 `docs/demo/演示腳本.md`。
 

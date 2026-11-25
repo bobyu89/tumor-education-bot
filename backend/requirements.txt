@@ -4,7 +4,7 @@ uvicorn[standard]>=0.30
 
 # ── LLM 供應商 ──
 google-genai>=0.3            # Gemma（現用）
-anthropic>=0.28             # Claude Sonnet 5（之後啟用）
+anthropic>=2.14             # 正式收案：Claude Sonnet 5.5 / Opus 5.5（需支援 output_config 與 fallbacks）
 
 # ── RAG / 向量庫 ──
 chromadb>=1.0

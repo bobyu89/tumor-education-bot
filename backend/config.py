@@ -1,5 +1,5 @@
 """
-環境變數與系統設定（使用 Google Gemini API）
+環境變數與系統設定
 """
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
@@ -7,12 +7,18 @@ from pathlib import Path
 
 
 class Settings(BaseSettings):
-    # ── LLM 供應商（換 Sonnet 5 只需改這兩個 + 提供 ANTHROPIC_API_KEY）──
-    LLM_PROVIDER: str = "google"              # "google" | "anthropic"
+    # ── LLM 供應商 ──
+    # 正式收案：LLM_PROVIDER=anthropic + PRIMARY_MODEL=claude-sonnet-5-5 或 claude-opus-5-5
+    LLM_PROVIDER: str = "google"              # "google" | "anthropic" | "mock"
     GOOGLE_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
-    PRIMARY_MODEL: str = "gemma-3-12b-it"     # google: gemma-3-12b-it；anthropic: claude-sonnet-5
+    PRIMARY_MODEL: str = "gemma-3-12b-it"     # google: gemma-3-12b-it；anthropic: claude-sonnet-5-5 / claude-opus-5-5
     SECONDARY_MODEL: str = "gemma-3-12b-it"
+    # Anthropic 專用（Sonnet 5.5 / Opus 5.5 不接受 temperature，改用 effort）
+    LLM_EFFORT: str = "low"                   # low | medium | high | xhigh | max；衛教問答用 low 即可
+    LLM_MAX_TOKENS: int = 4000                # 含模型思考的 token，不要設太小以免回答被截斷
+    LLM_TIMEOUT_SEC: float = 60.0
+    ANTHROPIC_REFUSAL_FALLBACK: bool = True   # 拒答時由 API 改用備援模型；IRB 要求單一模型時設 false
 
     # ── RAG ──
     CHROMA_DB_PATH: str = str(Path(__file__).parent.parent / "chroma_db")

@@ -49,7 +49,7 @@
 | `backend/auth.py` | 帳密雜湊 + 角色（patient/researcher/admin） |
 | `backend/redflag.py` | 紅旗偵測：關鍵字 + 否定 + 向量補充 |
 | `backend/quality.py` | 回答品質閘 |
-| `backend/llm_client.py` | LLM 供應商抽象（google / anthropic） |
+| `backend/llm_client.py` | LLM 供應商抽象（anthropic：Sonnet 5.5 / Opus 5.5；google；mock） |
 | `backend/rag.py` | 向量檢索 |
 | `backend/embedding.py` | 共用嵌入層，torch → ONNX 自動 fallback |
 | `scripts/index_vault.py` | 從 Markdown 知識庫建立向量索引 |
@@ -64,7 +64,8 @@ cd backend && pip install -r requirements.txt && cd ..
 # 2. 設定 .env（專案根目錄；.env 不進版控）
 cp .env.example .env
 #    預設 LLM_PROVIDER=mock（演示模式，不需 API key）
-#    要用真實模型：LLM_PROVIDER=google + GOOGLE_API_KEY=<Google AI Studio 金鑰>
+#    正式收案：LLM_PROVIDER=anthropic + PRIMARY_MODEL=claude-sonnet-5-5（或 claude-opus-5-5）+ ANTHROPIC_API_KEY
+#    （Google AI Studio 免費方案的條款允許用輸入資料改善產品，只能用於開發，不可用於真實病患）
 #    正式環境務必設定：AUTH_SECRET（固定後重啟不會把大家登出）、
 #                      ADMIN_PASSWORD（尚無管理者時，啟動會建立帳號 admin）
 
@@ -111,6 +112,7 @@ cd backend
 python -X utf8 test_security.py      # 資安回歸測試（對應資安審查各項）+ 前後端欄位契約
 python -X utf8 test_redflag.py       # 紅旗 v2 回歸測試集（redflag_cases.json，與演示引擎共用）
 python -X utf8 test_alerts.py        # 警示送達紀錄、未確認清單與確認、病患端安全文字
+python -X utf8 test_llm_claude.py    # Claude Sonnet 5.5 / Opus 5.5 串接（不呼叫 API）
 python -X utf8 test_phase1.py        # 地基單元測試（db/auth/redflag/quality）
 python -X utf8 test_phase2.py        # 症狀追問
 python -X utf8 test_phase3.py        # 研究統計與匯出

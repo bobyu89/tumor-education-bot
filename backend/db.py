@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS messages (
     provider          TEXT,
     prompt_tokens     INTEGER,
     completion_tokens INTEGER,
-    answer_quality    TEXT                    -- grounded|deflected_no_source|deflected_off_source|redflag_shortcut
+    answer_quality    TEXT                    -- grounded|deflected_no_source|deflected_off_source|redflag_shortcut|llm_error|llm_refusal
 );
 
 CREATE TABLE IF NOT EXISTS alerts (
