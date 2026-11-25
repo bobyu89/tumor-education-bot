@@ -17,17 +17,23 @@ class NurseAlertManager:
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
 
-    async def broadcast_alert(self, alert_data: dict):
-        """廣播緊急提醒給所有在線護理師"""
+    async def broadcast_alert(self, alert_data: dict) -> int:
+        """廣播提醒給所有在線的護理端連線，回傳「實際送達」的連線數。
+
+        回傳 0 代表當下沒有任何人在線 —— 呼叫端必須據實記錄（notified_channels=[]），
+        不可對病患宣稱「已通知」（2026-11 同儕審查 M2）。
+        """
         message = json.dumps(alert_data, ensure_ascii=False)
-        dead = []
-        for conn in self.active_connections:
+        dead, delivered = [], 0
+        for conn in list(self.active_connections):
             try:
                 await conn.send_text(message)
+                delivered += 1
             except Exception:
                 dead.append(conn)
         for conn in dead:
-            self.active_connections.remove(conn)
+            self.disconnect(conn)
+        return delivered
 
     @property
     def connection_count(self) -> int:

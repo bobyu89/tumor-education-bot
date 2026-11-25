@@ -67,7 +67,9 @@ check("HIGH：胸痛", screen("我突然胸痛", use_vector=False).severity == "
 check("HIGH：自傷（不套否定）", screen("我不想活了", use_vector=False).severity == "high")
 check("否定：沒有胸痛 → 不觸發", screen("我這幾天都沒有胸痛", use_vector=False).severity == "none")
 check("假設：如果胸痛 → 不觸發", screen("護理師說如果胸痛要回診", use_vector=False).severity == "none")
-check("MEDIUM：發高燒", screen("我發高燒", use_vector=False).severity == "medium")
+# v2：化療病人發燒可能是 febrile neutropenia，由 MEDIUM 改為 HIGH（2026-11 同儕審查）
+check("HIGH：發高燒", screen("我發高燒", use_vector=False).severity == "high")
+check("MEDIUM：一直拉肚子", screen("我一直拉肚子", use_vector=False).severity == "medium")
 check("正常衛教問題 → none", screen("化療後可以吃什麼水果", use_vector=False).severity == "none")
 # 關鍵安全案例：ONC-39 內文含「呼吸困難」，病患複述不該因單純提及就誤判為真實發作
 r = screen("衛教單張說過敏會呼吸困難，那是什麼意思", use_vector=False)

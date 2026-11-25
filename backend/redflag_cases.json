@@ -1,0 +1,430 @@
+{
+ "_說明": "紅旗關鍵字層的開發用回歸測試集（use_vector=False）。來源：v1 既有測試、2026-11 三位同儕審查者實測句、衛教單張『何時通知醫護人員』段落。這是開發者撰寫的回歸集，不是臨床驗證集；正式驗證需由臨床人員獨立撰寫 held-out 測試集。Python（test_redflag.py）與演示引擎（scripts/test_pages_engine.js）共用本檔，確保兩邊規則一致。",
+ "cases": [
+  {
+   "text": "我突然胸痛",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "v1"
+  },
+  {
+   "text": "我不想活了",
+   "expect": "high",
+   "category": "self_harm",
+   "src": "v1"
+  },
+  {
+   "text": "我這幾天都沒有胸痛",
+   "expect": "none",
+   "src": "v1 否定"
+  },
+  {
+   "text": "護理師說如果胸痛要回診",
+   "expect": "none",
+   "src": "v1 假設"
+  },
+  {
+   "text": "化療後可以吃什麼水果",
+   "expect": "none",
+   "src": "v1"
+  },
+  {
+   "text": "我發燒了",
+   "expect": "high",
+   "category": "fever",
+   "src": "護理審查"
+  },
+  {
+   "text": "我發高燒",
+   "expect": "high",
+   "category": "fever",
+   "src": "v1 改為 HIGH"
+  },
+  {
+   "text": "體溫38度",
+   "expect": "high",
+   "category": "fever",
+   "src": "護理審查"
+  },
+  {
+   "text": "燒到39度",
+   "expect": "high",
+   "category": "fever",
+   "src": "護理審查"
+  },
+  {
+   "text": "發冷發抖",
+   "expect": "high",
+   "category": "fever",
+   "src": "護理審查"
+  },
+  {
+   "text": "我今天發燒38.5度",
+   "expect": "high",
+   "category": "fever",
+   "src": "醫師審查"
+  },
+  {
+   "text": "發抖發冷，量了38.3",
+   "expect": "high",
+   "category": "fever",
+   "src": "醫師審查"
+  },
+  {
+   "text": "打完化療第10天發燒了",
+   "expect": "high",
+   "category": "fever",
+   "src": "醫師審查"
+  },
+  {
+   "text": "人工血管那邊紅腫發燒",
+   "expect": "high",
+   "category": "fever",
+   "src": "醫師審查"
+  },
+  {
+   "text": "發燒38.5度全身發抖",
+   "expect": "high",
+   "category": "fever",
+   "src": "資工審查"
+  },
+  {
+   "text": "耳溫３８．２",
+   "expect": "high",
+   "category": "fever",
+   "src": "全形數字"
+  },
+  {
+   "text": "量體溫三十八度半",
+   "expect": "high",
+   "category": "fever",
+   "src": "中文數字"
+  },
+  {
+   "text": "身體燒燒的",
+   "expect": "high",
+   "category": "fever",
+   "src": "台灣口語"
+  },
+  {
+   "text": "發燒可以吃退燒藥嗎",
+   "expect": "high",
+   "category": "fever",
+   "src": "ONC-25 不可自行吃退燒藥"
+  },
+  {
+   "text": "我沒有發燒，只是有點累",
+   "expect": "none",
+   "src": "否定"
+  },
+  {
+   "text": "這幾天都沒什麼發燒",
+   "expect": "none",
+   "src": "否定＋填充字"
+  },
+  {
+   "text": "量了沒有到38度",
+   "expect": "none",
+   "src": "體溫否定"
+  },
+  {
+   "text": "如果發燒要怎麼辦",
+   "expect": "none",
+   "src": "假設語境"
+  },
+  {
+   "text": "萬一發燒可以吃退燒藥嗎",
+   "expect": "none",
+   "src": "假設語境"
+  },
+  {
+   "text": "今天外面38度好熱",
+   "expect": "none",
+   "src": "環境溫度"
+  },
+  {
+   "text": "體溫37.6度",
+   "expect": "medium",
+   "category": "fever",
+   "src": "37.5–37.9"
+  },
+  {
+   "text": "體溫36.8正常嗎",
+   "expect": "none",
+   "src": "正常體溫"
+  },
+  {
+   "text": "我昨天沒睡好今天胸痛",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "護理審查（v1 否定誤殺）"
+  },
+  {
+   "text": "全身無力，胸痛",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "醫師審查（v1 否定誤殺）"
+  },
+  {
+   "text": "沒有發燒但是胸痛",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "醫師審查"
+  },
+  {
+   "text": "我沒事，只是胸痛",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "醫師審查"
+  },
+  {
+   "text": "化療後沒多久就胸悶",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "醫師審查"
+  },
+  {
+   "text": "我沒辦法呼吸，呼吸困難",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "資工審查"
+  },
+  {
+   "text": "好怕，胸痛到不行",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "資工審查"
+  },
+  {
+   "text": "沒想到突然胸痛",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "資工審查"
+  },
+  {
+   "text": "胸口好痛",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "資工審查"
+  },
+  {
+   "text": "胸口痛",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "醫師審查"
+  },
+  {
+   "text": "喘到不能講話",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "資工審查"
+  },
+  {
+   "text": "喘袂過來",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "護理審查（台語）"
+  },
+  {
+   "text": "我會喘，呼吸有點困難",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "護理審查"
+  },
+  {
+   "text": "爬樓梯沒有很喘",
+   "expect": "none",
+   "src": "否定"
+  },
+  {
+   "text": "吐血了",
+   "expect": "high",
+   "category": "bleeding",
+   "src": "醫師審查"
+  },
+  {
+   "text": "大便黑黑的",
+   "expect": "high",
+   "category": "bleeding",
+   "src": "醫師審查"
+  },
+  {
+   "text": "大便黑黑的像柏油",
+   "expect": "high",
+   "category": "bleeding",
+   "src": "資工審查"
+  },
+  {
+   "text": "解黑便",
+   "expect": "high",
+   "category": "bleeding",
+   "src": "護理審查"
+  },
+  {
+   "text": "流鼻血止不住",
+   "expect": "high",
+   "category": "bleeding",
+   "src": "醫師審查"
+  },
+  {
+   "text": "刷牙流血一直止不住",
+   "expect": "high",
+   "category": "bleeding",
+   "src": "ONC-18"
+  },
+  {
+   "text": "上廁所有一點血便",
+   "expect": "medium",
+   "category": "bleeding",
+   "src": "MEDIUM，待臨床確認"
+  },
+  {
+   "text": "牙齦流血",
+   "expect": "medium",
+   "category": "bleeding",
+   "src": "ONC-18"
+  },
+  {
+   "text": "眼淚止不住",
+   "expect": "none",
+   "src": "避免『止不住』誤報"
+  },
+  {
+   "text": "今天都沒有尿",
+   "expect": "high",
+   "category": "dehydration",
+   "src": "醫師審查"
+  },
+  {
+   "text": "喝水都吐出來",
+   "expect": "high",
+   "category": "dehydration",
+   "src": "脫水"
+  },
+  {
+   "text": "打點滴時臉很紅，喉嚨很緊",
+   "expect": "high",
+   "category": "allergy",
+   "src": "醫師審查"
+  },
+  {
+   "text": "嘴唇腫起來",
+   "expect": "high",
+   "category": "allergy",
+   "src": "醫師審查"
+  },
+  {
+   "text": "臉腫起來",
+   "expect": "high",
+   "category": "allergy",
+   "src": "v1"
+  },
+  {
+   "text": "跌倒撞到頭",
+   "expect": "high",
+   "category": "injury",
+   "src": "血小板低下＋頭部外傷"
+  },
+  {
+   "text": "我昨天跌倒了膝蓋擦傷",
+   "expect": "medium",
+   "category": "injury",
+   "src": "醫師審查（v1 誤報 HIGH）"
+  },
+  {
+   "text": "想一了百了",
+   "expect": "high",
+   "category": "self_harm",
+   "src": "資工審查"
+  },
+  {
+   "text": "我把安眠藥都存起來了",
+   "expect": "high",
+   "category": "self_harm",
+   "src": "資工審查"
+  },
+  {
+   "text": "我想欲死",
+   "expect": "high",
+   "category": "self_harm",
+   "src": "護理審查（台語）"
+  },
+  {
+   "text": "活著沒有意義",
+   "expect": "high",
+   "category": "self_harm",
+   "src": "自傷"
+  },
+  {
+   "text": "這樣做有沒有意義",
+   "expect": "none",
+   "src": "護理審查（v1 誤報）"
+  },
+  {
+   "text": "這樣漱口有沒有意義？",
+   "expect": "none",
+   "src": "資工審查（v1 誤報）"
+  },
+  {
+   "text": "吃保健食品到底有沒有意義",
+   "expect": "none",
+   "src": "醫師審查（v1 誤報）"
+  },
+  {
+   "text": "嘴巴破吞不下飯",
+   "expect": "medium",
+   "category": "swallowing",
+   "src": "醫師審查（v1 誤報 HIGH）"
+  },
+  {
+   "text": "嘴巴破到吞不下飯",
+   "expect": "medium",
+   "category": "swallowing",
+   "src": "資工審查（v1 誤報 HIGH）"
+  },
+  {
+   "text": "胃在燒很不舒服",
+   "expect": "none",
+   "src": "火燒心，非發燒"
+  },
+  {
+   "text": "化療前要怎麼預防想吐",
+   "expect": "none",
+   "src": "一般衛教"
+  },
+  {
+   "text": "掉頭髮會再長回來嗎",
+   "expect": "none",
+   "src": "一般衛教"
+  },
+  {
+   "text": "手腳麻麻的怎麼辦",
+   "expect": "none",
+   "src": "一般衛教（由症狀評估接手）"
+  },
+  {
+   "text": "胸口很悶",
+   "expect": "high",
+   "category": "cardiorespiratory",
+   "src": "資工審查探針（v2 首次獨立實測漏接，修正後加入；此後不再是獨立測試）"
+  },
+  {
+   "text": "我想從樓上跳下去",
+   "expect": "high",
+   "category": "self_harm",
+   "src": "資工審查探針（v2 首次獨立實測漏接，修正後加入；此後不再是獨立測試）"
+  },
+  {
+   "text": "活著沒意思",
+   "expect": "high",
+   "category": "self_harm",
+   "src": "資工審查探針（v2 首次獨立實測漏接，修正後加入；此後不再是獨立測試）"
+  },
+  {
+   "text": "頭很暈站不起來",
+   "expect": "high",
+   "category": "dehydration",
+   "src": "資工審查探針（v2 首次獨立實測漏接，修正後加入；此後不再是獨立測試）"
+  }
+ ]
+}

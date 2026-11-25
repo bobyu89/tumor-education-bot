@@ -16,8 +16,11 @@
 """
 from __future__ import annotations
 
-# 固定轉介文字（無來源時使用，確定性、不經 LLM）
-DEFLECT_TEXT = "這個問題我需要請護理師為您解答，我先幫您記錄下來，護理師會盡快回覆您。"
+from safety_text import deflect_reply
+
+# 固定轉介文字（無來源時使用，確定性、不經 LLM）。依管道不同，見 safety_text.deflect_reply；
+# 舊版「護理師會盡快回覆您」是系統做不到的承諾，已移除（2026-11 同儕審查）。
+DEFLECT_TEXT = deflect_reply("web", "")
 
 # 模型自述無法回答的訊號（表示它自己踩了誠實邊界）
 _DEFLECT_SIGNALS = ["請護理師", "無法回答", "沒有相關", "建議您諮詢", "無法提供", "請詢問醫"]

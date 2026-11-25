@@ -4,6 +4,7 @@
 來源：
   Obsidian_Vault/衛教知識庫/ONC-*.md   → 13 份單張的章節全文（排除「參考資料」「護理指導評值」）
   backend/quiz_bank.json               → 知識測驗題庫（靜態頁在瀏覽器內評分，正解會在原始碼中，僅供演示）
+  backend/redflag.py、safety_text.py   → 紅旗規則與病患端安全回覆（演示引擎直接用同一份，不另外手抄）
   本檔內的 PATIENTS / SEED             → 與 scripts/seed_demo.py 對應的 5 位模擬病患與歷程摘要
 
 執行（專案根目錄）：python -X utf8 scripts/build_pages.py
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -155,11 +157,35 @@ def parse_leaflet(path: Path) -> dict:
             "keywords": KEYWORDS.get(code, []) + [topic], "sections": out_sections}
 
 
+def _backend():
+    sys.path.insert(0, str(ROOT / "backend"))      # redflag.py / safety_text.py 只用標準函式庫
+
+
+def export_redflag() -> dict:
+    """紅旗規則單一來源：backend/redflag.py。演示引擎讀這份，避免兩邊規則分歧。"""
+    _backend()
+    import redflag as rf
+    return {
+        "selfHarm": rf.HIGH_SELF_HARM, "high": rf.HIGH_PHYSICAL, "medium": rf.MEDIUM,
+        "negCues": rf._NEG_CUES, "fillers": rf._FILLERS, "hypothetical": rf._HYPOTHETICAL,
+        "ambient": rf._AMBIENT, "clauseSplit": rf._CLAUSE_SPLIT.pattern,
+        "tempRe": rf._TEMP_RE.pattern, "tempCtxRe": rf._TEMP_CTX_RE.pattern,
+        "zhTempRe": rf._ZH_TEMP_RE.pattern, "zhNum": rf._ZH_NUM,
+    }
+
+
+def export_safety_text() -> dict:
+    _backend()
+    import safety_text
+    return safety_text.export_for_demo("若情況緊急請直接撥打 119")
+
+
 def main():
     leaflets = [parse_leaflet(p) for p in sorted(VAULT.glob("ONC-*.md"))]
     quiz = json.loads((ROOT / "backend" / "quiz_bank.json").read_text(encoding="utf-8"))
     data = {"leaflets": leaflets, "quiz": quiz, "patients": PATIENTS, "seed": SEED,
-            "builtFrom": "Obsidian_Vault/衛教知識庫 + backend/quiz_bank.json"}
+            "redflag": export_redflag(), "safetyText": export_safety_text(),
+            "builtFrom": "Obsidian_Vault/衛教知識庫 + backend/quiz_bank.json + backend/redflag.py + backend/safety_text.py"}
     js = ("// 由 scripts/build_pages.py 產生，請勿手改。\n"
           "(function (root) {\n  var DEMO_DATA = " + json.dumps(data, ensure_ascii=False, indent=1) +
           ";\n  if (typeof module !== 'undefined' && module.exports) module.exports = DEMO_DATA;\n"

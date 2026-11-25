@@ -96,10 +96,10 @@ CREATE TABLE IF NOT EXISTS alerts (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     patient_code      TEXT NOT NULL,
     trigger           TEXT,                   -- 觸發的症狀/關鍵字
-    level             TEXT NOT NULL,          -- medium|high
+    level             TEXT NOT NULL,          -- high|medium|info（info＝知識庫外提問，待處理）
     source_message_id INTEGER,
     ts                TEXT NOT NULL,
-    notified_channels TEXT,                   -- json array: ["websocket","telegram"]
+    notified_channels TEXT,                   -- json array；只記「實際送達」的管道，沒人在線即 []
     ack_by            TEXT,
     ack_at            TEXT
 );
@@ -301,6 +301,41 @@ def add_alert(
         return cur.lastrowid
 
 
+_LEVEL_ORDER = {"high": 0, "medium": 1, "info": 2}
+
+
+def list_alerts(status: str = "open", limit: int = 200) -> list[dict]:
+    """護理端警示清單。status：open（未確認）| acked | all。依等級、時間排序（high 優先）。"""
+    where = {"open": "WHERE a.ack_at IS NULL", "acked": "WHERE a.ack_at IS NOT NULL", "all": ""}[status]
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"""SELECT a.id, a.patient_code, a.trigger, a.level, a.ts, a.notified_channels,
+                       a.ack_by, a.ack_at, m.content AS message
+                FROM alerts a LEFT JOIN messages m ON m.id = a.source_message_id
+                {where} ORDER BY a.ts DESC LIMIT ?""", (limit,)
+        ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["notified_channels"] = json.loads(d["notified_channels"] or "[]")
+        out.append(d)
+    out.sort(key=lambda d: (_LEVEL_ORDER.get(d["level"], 9), d["ts"]))
+    return out
+
+
+def ack_alert(alert_id: int, account: str) -> str:
+    """確認警示。回傳 "ok" | "not_found" | "already"。只寫一次，不可覆蓋（保留第一位確認者）。"""
+    with get_conn() as conn:
+        row = conn.execute("SELECT ack_at FROM alerts WHERE id=?", (alert_id,)).fetchone()
+        if row is None:
+            return "not_found"
+        if row["ack_at"]:
+            return "already"
+        conn.execute("UPDATE alerts SET ack_by=?, ack_at=? WHERE id=? AND ack_at IS NULL",
+                     (account, _now(), alert_id))
+    return "ok"
+
+
 # ── 研究者查詢用 ──────────────────────────────────────────────────
 def list_sessions_summary() -> list[dict]:
     with get_conn() as conn:
@@ -314,7 +349,8 @@ def list_sessions_summary() -> list[dict]:
                 "SELECT COUNT(*) AS c FROM messages WHERE patient_code=?", (code,)
             ).fetchone()["c"]
             flags = conn.execute(
-                "SELECT trigger, level, ts FROM alerts WHERE patient_code=? ORDER BY ts DESC",
+                "SELECT trigger, level, ts FROM alerts WHERE patient_code=? "
+                "AND level IN ('high','medium') ORDER BY ts DESC",     # info（知識庫外提問）不算紅旗
                 (code,),
             ).fetchall()
             last = conn.execute(

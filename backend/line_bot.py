@@ -88,8 +88,10 @@ async def handle_event(event: dict) -> None:
 
 async def _handle_unbound(user_id: str, reply_token: str, text: str) -> None:
     # 尚未綁定、不知道是誰，但急症仍要先給緊急指引
-    if redflag_screen(text, use_vector=False).severity == "high":
-        await send(user_id, reply_token, _emergency_reply("line") + "\n\n" + ASK_CODE, urgent=True)
+    flag = redflag_screen(text, use_vector=False)
+    if flag.severity == "high":
+        await send(user_id, reply_token, _emergency_reply("line", flag.category) + "\n\n" + ASK_CODE,
+                   urgent=True)
         return
     if not binding.looks_like_code(text):        # 打招呼等不算輸錯，避免被鎖
         await send(user_id, reply_token, ASK_CODE)

@@ -11,6 +11,12 @@ channel 決定給病患的求助指引：
   web  —— 住院病患在病房用網頁，可以按呼叫鈴
   line —— 化療後居家病患，沒有呼叫鈴；指引改為撥打電話，且不承諾「護理師會回覆」，
           因為系統無法保證當下有人在看警示
+
+警示紀錄（alerts 表）據實記錄（2026-11 同儕審查 M2）：
+  - notified_channels 只在 WebSocket「實際送達 ≥1 個在線護理端」時才寫 ["websocket"]，否則為 []；
+  - high / medium 都推播並落庫，護理端以 GET /alerts 看未確認清單、POST /alerts/{id}/ack 確認；
+  - 知識庫外提問記為 level="info"（待處理問題），讓問題進入護理端清單，而不是石沉大海；
+  - 病患端文字不宣稱「已通知」，見 safety_text.py。
 """
 from __future__ import annotations
 
@@ -28,31 +34,29 @@ from models import ChatResponse, PatientProfile
 from prompt import build_prompt
 from rag import retriever
 from redflag import screen as redflag_screen
+from safety_text import deflect_reply, emergency_reply, escalation_reply, help_text
 from websocket_manager import manager
 
 Channel = str   # "web" | "line"
 
 
 def _help_text(channel: Channel) -> str:
-    if channel == "line":
-        return f"{settings.EMERGENCY_CONTACT}。"
-    return "請按旁邊的呼叫鈴通知護理師。"
+    return help_text(channel, settings.EMERGENCY_CONTACT)
 
 
-def _emergency_reply(channel: Channel) -> str:
-    if channel == "line":
-        return ("這個狀況需要立即處理，請不要等待訊息回覆。"
-                f"{settings.EMERGENCY_CONTACT}。系統已記錄並通知醫療團隊。")
-    return ("這個狀況需要馬上讓護理師或醫師知道，請按旁邊的呼叫鈴，"
-            "系統已同時發出警示。若情況緊急請直接撥打護理站電話或119。")
+def _emergency_reply(channel: Channel, category: str = "other") -> str:
+    return emergency_reply(channel, category, settings.EMERGENCY_CONTACT)
 
 
-def _escalation_reply(channel: Channel, symptom_name: str, score) -> str | None:
-    if channel == "line":
-        return (f"您的「{symptom_name}」聽起來比較嚴重（嚴重度 {score}/10）。"
-                "系統已記錄並通知醫療團隊，但請不要等待回覆，"
-                f"{settings.EMERGENCY_CONTACT}。")
-    return None   # 網頁沿用 assessment 原本的回覆
+async def _notify(payload: dict, pid: str, trigger: str, level: str, msg_id: int | None) -> int:
+    """推播給在線護理端並落庫；notified_channels 依「實際送達」據實記錄。回傳 alert id。"""
+    delivered = await manager.broadcast_alert(payload)
+    channels = ["websocket"] if delivered else []
+    alert_id = db.add_alert(pid, trigger, level, msg_id, notified_channels=channels)
+    if not delivered and level == "high":
+        # 沒有任何護理端在線：留下可稽核的紀錄（供每日檢視「無人即時看到的 HIGH」）
+        db.log_event("alert_undelivered", pid, {"alert_id": alert_id, "level": level, "trigger": trigger})
+    return alert_id
 
 
 async def process_message(pid: str, text: str, channel: Channel = "web") -> ChatResponse:
@@ -65,22 +69,25 @@ async def process_message(pid: str, text: str, channel: Channel = "web") -> Chat
                             redflag_terms=flag.matched_keywords)
 
     if flag.severity == "high":
-        await manager.broadcast_alert({
+        await _notify({
             "type": "EMERGENCY_ALERT", "severity": "high",
             "patient_id": pid,                       # 只送假名代號，不送真名（資安審查 S2/S5）
             "channel": channel,
             "message": text,
             "keywords": flag.matched_keywords,
+            "category": flag.category,
             "via": flag.via,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-        db.add_alert(pid, "；".join(flag.matched_keywords) or f"vector:{flag.via}",
-                     "high", msg_id, notified_channels=["websocket"])
+        }, pid, "；".join(flag.matched_keywords) or f"vector:{flag.via}", "high", msg_id)
         db.log_event("redflag_high", pid,
-                     {"terms": flag.matched_keywords, "via": flag.via, "channel": channel})
-        reply = _emergency_reply(channel)
+                     {"terms": flag.matched_keywords, "via": flag.via, "channel": channel,
+                      "category": flag.category})
+        reply = _emergency_reply(channel, flag.category)
         db.add_message(pid, "bot", reply, answer_quality="redflag_shortcut")
         return _response(pid, reply, is_emergency=True, keywords=flag.matched_keywords)
+
+    # MEDIUM：推播（非緊急）＋進入未確認清單，不論之後走評估或衛教路徑都只記一次
+    await _record_medium_alert(pid, flag, msg_id, channel, text)
 
     # ② 症狀結構化追問
     state = db.get_assessment_state(pid)
@@ -116,16 +123,21 @@ def _assess_reply(pid: str, ar, flag) -> ChatResponse:
 
 
 async def _escalate(pid: str, ar, msg_id: int, channel: Channel) -> ChatResponse:
-    await manager.broadcast_alert({
+    name = _sym_name(ar.symptom)
+    await _notify({
         "type": "SYMPTOM_ALERT", "severity": ar.escalate_level,
         "patient_id": pid, "channel": channel,
-        "message": f"{_sym_name(ar.symptom)} 嚴重度 {ar.score}/10",
+        "message": f"{name} 嚴重度 {ar.score}/10",
         "keywords": [ar.symptom], "via": "assessment",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
-    db.add_alert(pid, f"{_sym_name(ar.symptom)} {ar.score}/10", ar.escalate_level, msg_id,
-                 notified_channels=["websocket"])
-    reply = _escalation_reply(channel, _sym_name(ar.symptom), ar.score) or ar.reply
+    }, pid, f"{name} {ar.score}/10", ar.escalate_level, msg_id)
+    if channel == "line":
+        proto = assessment._BY_KEY.get(ar.symptom)
+        field = assessment._fmt_field(proto, ar.extra) if proto else ""
+        reply = escalation_reply("line", name, ar.score, f"，{field}" if field else "",
+                                 ar.escalate_level, settings.EMERGENCY_CONTACT)
+    else:
+        reply = ar.reply
     db.add_message(pid, "bot", reply, answer_quality="assessment_escalated")
     return _response(pid, reply, is_emergency=True, keywords=[ar.symptom])
 
@@ -149,12 +161,13 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
     sources = [d["source"] for d in rag_docs]
 
     if not quality.pre_check(rag_docs):
-        reply = quality.DEFLECT_TEXT
+        reply = deflect_reply(channel, settings.EMERGENCY_CONTACT)
         db.add_message(pid, "bot", reply, rag_sources=[], answer_quality="deflected_no_source")
-        _record_medium_alert(pid, flag, msg_id)
+        # 知識庫外提問進入護理端待處理清單（level=info，不推播、不承諾回覆）
+        db.add_alert(pid, f"知識庫外提問：{query_text[:40]}", "info", msg_id, notified_channels=[])
         return _response(pid, reply, keywords=flag.matched_keywords)
 
-    system_prompt = build_prompt(profile, rag_docs)
+    system_prompt = build_prompt(profile, rag_docs, channel=channel)
     history = db.get_history(pid, limit=12)
     model_id = settings.PRIMARY_MODEL
 
@@ -174,7 +187,6 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
         reply += f"如有緊急狀況，{_help_text(channel)}"
         db.add_message(pid, "bot", reply, rag_sources=sources, model_id=model_id,
                        provider=settings.LLM_PROVIDER, answer_quality="llm_error")
-        _record_medium_alert(pid, flag, msg_id)
         return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
 
     reply = result.text
@@ -182,14 +194,19 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
                    model_id=model_id, provider=result.provider,
                    prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
                    answer_quality=quality.classify(reply, rag_docs))
-    _record_medium_alert(pid, flag, msg_id)
     return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
 
 
-def _record_medium_alert(pid: str, flag, msg_id: int):
-    if flag.severity == "medium":
-        db.add_alert(pid, "；".join(flag.matched_keywords) or f"vector:{flag.via}",
-                     "medium", msg_id, notified_channels=[])
+async def _record_medium_alert(pid: str, flag, msg_id: int, channel: Channel, text: str):
+    """MEDIUM 紅旗：推播（非緊急）並落庫，進入護理端未確認清單。v1 只落庫、不通知任何人。"""
+    if flag.severity != "medium":
+        return
+    await _notify({
+        "type": "MEDIUM_FLAG", "severity": "medium",
+        "patient_id": pid, "channel": channel, "message": text,
+        "keywords": flag.matched_keywords, "category": flag.category, "via": flag.via,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }, pid, "；".join(flag.matched_keywords) or f"vector:{flag.via}", "medium", msg_id)
 
 
 def load_profile(patient_code: str) -> PatientProfile | None:

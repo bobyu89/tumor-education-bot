@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass, field as dc_field
 
 import db
+from safety_text import escalation_reply
 
 ESAS_SEVERE = 7   # ESAS-r ≥ 7 視為嚴重
 
@@ -32,13 +33,16 @@ class Protocol:
     field_question: str | None = None
     escalate_count: int | None = None
     escalates: bool = True                 # hair_loss 不升級
+    high_count: int | None = None          # 特有欄位達此值 → 升級為 HIGH（對齊 CTCAE v5.0 grade 3）
 
 
 PROTOCOLS: list[Protocol] = [
     Protocol("nausea", "噁心嘔吐", ["想吐", "噁心", "嘔吐", "反胃", "吐了"],
-             "ONC-21", "count", "這一天下來大概吐了幾次呢？（請給個數字）", escalate_count=5),
+             "ONC-21", "count", "這一天下來大概吐了幾次呢？（請給個數字）", escalate_count=5,
+             high_count=6),      # CTCAE v5.0 vomiting grade 3：24 小時內 ≥6 次
     Protocol("diarrhea", "腹瀉", ["拉肚子", "腹瀉", "一直拉", "水便"],
-             "ONC-22", "count", "今天大概拉了幾次呢？（請給個數字）", escalate_count=6),
+             "ONC-22", "count", "今天大概拉了幾次呢？（請給個數字）", escalate_count=6,
+             high_count=7),      # CTCAE v5.0 diarrhea grade 3：較平常增加 ≥7 次／天
     Protocol("constipation", "便祕", ["便祕", "便秘", "大不出來", "解不出來", "沒排便"],
              "ONC-23", "days", "已經幾天沒有排便了呢？（請給個數字）", escalate_count=3),
     Protocol("mucositis", "口腔黏膜炎", ["嘴巴破", "口腔破", "口腔潰瘍", "嘴破", "黏膜"],
@@ -212,16 +216,19 @@ def _complete(patient_code: str, proto: Protocol, data: dict) -> AssessmentResul
                   and proto.field_key in extra
                   and extra[proto.field_key] >= proto.escalate_count)
     escalate = proto.escalates and (over_score or over_count)
+    over_high = (proto.high_count is not None and proto.field_key in extra
+                 and extra[proto.field_key] >= proto.high_count)
+    level = "high" if escalate and over_high else "medium"
 
     db.log_event("assessment_complete", patient_code,
                  {"symptom": proto.key, "score": score, "extra": extra, "escalate": escalate})
 
     if escalate:
-        reply = (f"您的「{proto.name}」聽起來比較嚴重（嚴重度 {score}/10"
-                 f"{'，' + _fmt_field(proto, extra) if _fmt_field(proto, extra) else ''}）。"
-                 f"我已經幫您記錄並通知護理師，請稍候，也可以直接按呼叫鈴。")
+        detail = f"，{_fmt_field(proto, extra)}" if _fmt_field(proto, extra) else ""
+        # 網頁版回覆；LINE 由 chat_service 依管道改寫（含聯絡電話、不承諾即時回覆）
+        reply = escalation_reply("web", proto.name, score, detail, level, "")
         return AssessmentResult(reply=reply, done=True, escalate=True,
-                                escalate_level="medium", symptom=proto.key,
+                                escalate_level=level, symptom=proto.key,
                                 onc_code=proto.onc_code, score=score, extra=extra)
 
     # 未達門檻 → 交回 main.py 走 RAG 衛教

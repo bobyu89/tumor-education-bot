@@ -14,6 +14,7 @@ from pathlib import Path
 import json
 import logging
 import secrets
+from datetime import datetime, timezone
 
 import activity
 import auth
@@ -185,6 +186,39 @@ async def export_table(table: str, user: dict = Depends(staff_user)):
     )
 
 
+# ── 警示確認（護理端）──────────────────────────────────────────────
+def _sla_minutes(level: str) -> int:
+    return {"high": settings.ALERT_SLA_HIGH_MIN, "medium": settings.ALERT_SLA_MEDIUM_MIN}.get(
+        level, settings.ALERT_SLA_INFO_MIN)
+
+
+@app.get("/alerts")
+async def list_alerts(status: str = Query(default="open", pattern="^(open|acked|all)$"),
+                      user: dict = Depends(staff_user)):
+    """未確認（或全部）警示，high 優先。overdue＝超過確認時限仍未確認（時限見 config.ALERT_SLA_*）。"""
+    _audit(user, "view_alerts", status=status)
+    now = datetime.now(timezone.utc)
+    items = db.list_alerts(status)
+    for a in items:
+        age = (now - datetime.fromisoformat(a["ts"])).total_seconds() / 60
+        a["age_min"] = int(age)
+        a["sla_min"] = _sla_minutes(a["level"])
+        a["overdue"] = a["ack_at"] is None and age > a["sla_min"]
+    return {"status": status, "nurse_connections": manager.connection_count, "items": items}
+
+
+@app.post("/alerts/{alert_id}/ack")
+async def ack_alert(alert_id: int, user: dict = Depends(staff_user)):
+    """確認警示（表示已有人處理）。只能確認一次，保留第一位確認者。"""
+    result = db.ack_alert(alert_id, user["account"])
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="無此警示")
+    if result == "already":
+        raise HTTPException(status_code=409, detail="此警示已被確認")
+    _audit(user, "ack_alert", alert_id=alert_id)
+    return {"ok": True, "alert_id": alert_id, "ack_by": user["account"]}
+
+
 # ── 活動 LOG ──────────────────────────────────────────────────────
 @app.get("/logs/patient/{patient_code}")
 async def patient_log(patient_code: str, user: dict = Depends(staff_user)):
@@ -277,4 +311,5 @@ async def nurse_websocket(websocket: WebSocket, token: str = Query(default="")):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "rag_chunks": retriever.collection.count()}
+    return {"status": "ok", "rag_chunks": retriever.collection.count(),
+            "nurse_connections": manager.connection_count}

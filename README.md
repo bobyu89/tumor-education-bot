@@ -23,6 +23,12 @@
 另含：回答品質閘（無來源不編造）、LLM 供應商抽象（Gemma → Sonnet 5 換一個環境變數）、
 紅旗改用「關鍵字為底 + 否定處理 + 向量補充」。
 
+**2026-11 同儕審查後修正（紅旗 v2 與警示確認）**：紅旗補上發燒（含體溫 ≥38°C 判讀）、出血、脫水、過敏、
+台語說法，否定改為子句內緊貼判斷；病患端不再宣稱「已通知」，LINE 聲明非 24 小時監看；
+警示據實記錄是否送達，護理端有「未確認警示」清單與確認（`GET /alerts`、`POST /alerts/{id}/ack`）。
+值班流程草案見 [`docs/ops/警示處理SOP_草案.md`](docs/ops/警示處理SOP_草案.md)。
+⚠️ 紅旗詞庫尚未經臨床人員審核與獨立測試集驗證，仍不可讓真實病患使用。
+
 完整設計見 [`docs/specs/2026-07-16-phase1-foundation-design.md`](docs/specs/2026-07-16-phase1-foundation-design.md)。
 
 ## 架構
@@ -103,6 +109,8 @@ cd backend && python -X utf8 -m uvicorn main:app --port 8000
 ```bash
 cd backend
 python -X utf8 test_security.py      # 資安回歸測試（對應資安審查各項）+ 前後端欄位契約
+python -X utf8 test_redflag.py       # 紅旗 v2 回歸測試集（redflag_cases.json，與演示引擎共用）
+python -X utf8 test_alerts.py        # 警示送達紀錄、未確認清單與確認、病患端安全文字
 python -X utf8 test_phase1.py        # 地基單元測試（db/auth/redflag/quality）
 python -X utf8 test_phase2.py        # 症狀追問
 python -X utf8 test_phase3.py        # 研究統計與匯出

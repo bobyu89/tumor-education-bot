@@ -44,22 +44,30 @@ TONE_TEMPLATES = {
 
 # ── 緊急安全邊界（永遠注入在最前面）──────────────────────────
 
+# 這是紅旗規則（redflag.py）漏接時的第二道防線；措辭依管道不同（居家 LINE 病患沒有呼叫鈴）。
 SAFETY_BOUNDARY = """
 重要安全規則（優先於其他所有指示）：
-1. 若病患提到胸痛、呼吸困難、意識喪失、想自傷等緊急症狀
-   → 立即回應：「這個症狀需要馬上告訴護理師或醫師，請按旁邊的呼叫鈴」
+1. 若病患提到發燒、胸痛、呼吸困難、出血不止、意識改變、嚴重過敏、想自傷等緊急症狀
+   → 立即回應：{action}
    → 不要繼續進行一般衛教
 2. 不要提供藥物劑量調整建議
 3. 不要做出診斷
 4. 所有衛教內容僅供參考，建議遵從主治醫師指示
 """
 
+
+def safety_boundary(channel: str = "web") -> str:
+    from config import settings
+    from safety_text import safety_rule_for_prompt
+    return SAFETY_BOUNDARY.format(action=safety_rule_for_prompt(channel, settings.EMERGENCY_CONTACT))
+
 # ── 主函式 ──────────────────────────────────────────
 
 def build_prompt(
     profile: "PatientProfile | None",
     rag_docs: list[dict],
-    output_format: str = "text"   # "text" | "bullet" | "card_json"
+    output_format: str = "text",  # "text" | "bullet" | "card_json"
+    channel: str = "web",         # "web"（住院，有呼叫鈴）| "line"（居家）
 ) -> str:
 
     # 1. 選擇語氣
@@ -83,7 +91,7 @@ def build_prompt(
     format_instruction = _get_format_instruction(output_format)
 
     # 4. 組合完整 prompt（Safety Boundary 永遠在最前面）
-    prompt = f"""{SAFETY_BOUNDARY}
+    prompt = f"""{safety_boundary(channel)}
 {tone_instruction}
 ── 病患資訊 ──
 {patient_info}
