@@ -14,11 +14,13 @@ from pathlib import Path
 import json
 import logging
 import secrets
+from datetime import datetime, timezone
 
 import activity
 import auth
 import binding
 import db
+import departments
 import line_bot
 import quiz
 import stats
@@ -27,7 +29,7 @@ from config import settings
 from models import ChatRequest, ChatResponse, LoginRequest, PatientCreate, QuizSubmit
 from rag import retriever
 from security import (admin_user, check_patient_code, is_valid_patient_code,
-                      patient_user, staff_from_ws_token, staff_user)
+                      patient_user, staff_from_ws_ticket, staff_user)
 from websocket_manager import manager
 
 app = FastAPI(
@@ -102,7 +104,11 @@ def _audit(user: dict, event: str, patient_code: str | None = None, **payload):
 # ── 認證 ──────────────────────────────────────────────────────────
 @app.post("/login")
 async def login(req: LoginRequest):
-    result = auth.authenticate(req.account.strip(), req.password)
+    try:
+        result = auth.authenticate(req.account.strip(), req.password)
+    except auth.LoginLocked:
+        raise HTTPException(status_code=429,
+                            detail=f"登入失敗次數過多，請 {settings.LOGIN_LOCK_MINUTES} 分鐘後再試，或聯絡管理者")
     if not result:
         raise HTTPException(status_code=401, detail="帳號或密碼錯誤")
     return result
@@ -185,6 +191,39 @@ async def export_table(table: str, user: dict = Depends(staff_user)):
     )
 
 
+# ── 警示確認（護理端）──────────────────────────────────────────────
+def _sla_minutes(level: str) -> int:
+    return {"high": settings.ALERT_SLA_HIGH_MIN, "medium": settings.ALERT_SLA_MEDIUM_MIN}.get(
+        level, settings.ALERT_SLA_INFO_MIN)
+
+
+@app.get("/alerts")
+async def list_alerts(status: str = Query(default="open", pattern="^(open|acked|all)$"),
+                      user: dict = Depends(staff_user)):
+    """未確認（或全部）警示，high 優先。overdue＝超過確認時限仍未確認（時限見 config.ALERT_SLA_*）。"""
+    _audit(user, "view_alerts", status=status)
+    now = datetime.now(timezone.utc)
+    items = db.list_alerts(status)
+    for a in items:
+        age = (now - datetime.fromisoformat(a["ts"])).total_seconds() / 60
+        a["age_min"] = int(age)
+        a["sla_min"] = _sla_minutes(a["level"])
+        a["overdue"] = a["ack_at"] is None and age > a["sla_min"]
+    return {"status": status, "nurse_connections": manager.connection_count, "items": items}
+
+
+@app.post("/alerts/{alert_id}/ack")
+async def ack_alert(alert_id: int, user: dict = Depends(staff_user)):
+    """確認警示（表示已有人處理）。只能確認一次，保留第一位確認者。"""
+    result = db.ack_alert(alert_id, user["account"])
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail="無此警示")
+    if result == "already":
+        raise HTTPException(status_code=409, detail="此警示已被確認")
+    _audit(user, "ack_alert", alert_id=alert_id)
+    return {"ok": True, "alert_id": alert_id, "ack_by": user["account"]}
+
+
 # ── 活動 LOG ──────────────────────────────────────────────────────
 @app.get("/logs/patient/{patient_code}")
 async def patient_log(patient_code: str, user: dict = Depends(staff_user)):
@@ -215,11 +254,21 @@ async def admin_create_patient(req: PatientCreate, user: dict = Depends(admin_us
         raise HTTPException(status_code=400, detail="代號格式需為 P 加 3–6 位數字，例如 P012")
     if binding.patient_exists(req.pseudonym):
         raise HTTPException(status_code=409, detail="此代號已存在")
+    if req.department and not departments.exists(req.department):
+        raise HTTPException(status_code=400, detail=f"未知的科別：{req.department}")
     auth.create_user(req.pseudonym, secrets.token_urlsafe(24), "patient",
                      pseudonym=req.pseudonym, created_by=user["account"],
                      cancer_type=req.cancer_type, age=req.age, gender=req.gender,
-                     education_level=req.education_level)
-    return {"pseudonym": req.pseudonym}
+                     education_level=req.education_level,
+                     department=req.department or settings.DEFAULT_DEPARTMENT)
+    return {"pseudonym": req.pseudonym, "department": req.department or settings.DEFAULT_DEPARTMENT}
+
+
+@app.get("/departments")
+async def list_departments(user: dict = Depends(staff_user)):
+    """可用科別（knowledge/*/manifest.json），供建立病患時選擇。"""
+    return [{"id": d.id, "name": d.name, "default": d.id == settings.DEFAULT_DEPARTMENT}
+            for d in departments.load_all().values()]
 
 
 @app.post("/admin/patients/{patient_code}/binding-code")
@@ -261,10 +310,16 @@ async def line_webhook(request: Request, background: BackgroundTasks):
     return {"status": "ok"}
 
 
+@app.post("/ws/ticket")
+async def ws_ticket(user: dict = Depends(staff_user)):
+    """取得 60 秒有效的 WebSocket 連線票券（網址裡只放票券，不放登入 token）。"""
+    return {"ticket": auth.make_ws_ticket(user)}
+
+
 @app.websocket("/ws/nurse")
-async def nurse_websocket(websocket: WebSocket, token: str = Query(default="")):
-    # 瀏覽器的 WebSocket 不能帶自訂 header，改用 ?token= 驗證（資安審查 S2）
-    if staff_from_ws_token(token) is None:
+async def nurse_websocket(websocket: WebSocket, ticket: str = Query(default="")):
+    # 瀏覽器的 WebSocket 不能帶自訂 header → 用 ?ticket= 短效票券驗證（資安審查 S2；2026-11 同儕審查）
+    if staff_from_ws_ticket(ticket) is None:
         await websocket.close(code=1008)
         return
     await manager.connect(websocket)
@@ -277,4 +332,5 @@ async def nurse_websocket(websocket: WebSocket, token: str = Query(default="")):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "rag_chunks": retriever.collection.count()}
+    return {"status": "ok", "rag_chunks": retriever.collection.count(),
+            "nurse_connections": manager.connection_count}

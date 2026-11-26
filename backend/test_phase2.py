@@ -29,6 +29,12 @@ check("嘴巴破 → mucositis", assessment.detect_symptom("化療後嘴巴破�
 check("手麻 → neuropathy", assessment.detect_symptom("我手腳麻麻的").key == "neuropathy")
 check("掉髮 → hair_loss", assessment.detect_symptom("頭髮一直掉").key == "hair_loss")
 check("純問候 → 無症狀", assessment.detect_symptom("你好啊") is None)
+# 資訊型提問不進評估（2026-11 同儕審查）
+check("預防提問 → 不進評估", assessment.detect_symptom("化療前要怎麼預防想吐") is None)
+check("原因提問 → 不進評估", assessment.detect_symptom("嘴巴破是什麼原因") is None)
+check("假設提問 → 不進評估", assessment.detect_symptom("如果拉肚子可以吃什麼") is None)
+check("有當下線索仍進評估", assessment.detect_symptom("我一直拉肚子要怎麼避免脫水").key == "diarrhea")
+check("描述症狀仍進評估", assessment.detect_symptom("化療後嘴巴破了").key == "mucositis")
 
 print("\n=== ESAS-r 0–10 解析 ===")
 check("數字 8", assessment.parse_severity("大概8分") == 8)
@@ -97,8 +103,21 @@ with TestClient(main.app) as client:
     db.clear_assessment_state("P001")
     r = client.post("/chat", json={"message": "我嘴巴破了好不舒服"}, headers=P).json()
     check("偵測 → 回問嚴重度（未進 LLM）", "幾分" in r["response"] and r["sources"] == [])
+    check("API 回傳 0–10 分按鈕＋先不用了", r["quick_replies"] == [str(i) for i in range(11)] + ["先不用了"])
     r = client.post("/chat", json={"message": "9分"}, headers=P).json()
     check("高分 → 升級為 emergency（未進 LLM）", r["is_emergency"] is True and "護理師" in r["response"])
+    check("評估結束後不再附按鈕", r["quick_replies"] == [])
+
+    print("\n=== 可點選回覆（按鈕送出的文字照樣能解析）===")
+    r = client.post("/chat", json={"message": "我一直拉肚子"}, headers=P).json()
+    r = client.post("/chat", json={"message": "3"}, headers=P).json()
+    check("次數題附次數按鈕", r["quick_replies"][:2] == ["1次", "2次"] and "10次以上" in r["quick_replies"])
+    r = client.post("/chat", json={"message": "10次以上"}, headers=P).json()
+    check("點「10次以上」→ 解析為 10 次並升級", r["is_emergency"] is True
+          and _json.loads(db.get_symptom_scores("P001", "diarrhea")[-1]["extra"]).get("count") == 10)
+    client.post("/chat", json={"message": "我手腳麻麻的"}, headers=P)
+    r = client.post("/chat", json={"message": "先不用了"}, headers=P).json()
+    check("點「先不用了」→ 中止評估", "先不談" in r["response"] and db.get_assessment_state("P001") is None)
 
 print(f"\n{'='*40}\n通過 {_pass} / {_pass + _fail}")
 db.DB_PATH.unlink(missing_ok=True)

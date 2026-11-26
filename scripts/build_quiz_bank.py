@@ -58,11 +58,13 @@ def parse_eval_section(md: str) -> tuple[dict, dict]:
                 n = int(qm.group(1))
                 questions[n] = {"n": n, "type": mode, "text": qm.group(2).strip()}
                 continue
-            # 選項行：(1)... 或 1.... 或 1、...
-            if mode == "mc" and re.match(r"^[（(]?1[）)．.、]", line) and questions:
+            # 選項行：(1)... 或 1.... 或 1、...；選項可能分散在多行（(1)… 下一行 (2)…），逐行累加
+            if mode == "mc" and questions and re.match(r"^[（(]?\d+[）)．.、]", line):
                 opts = _parse_options(line)
                 if opts:
-                    questions[max(questions)]["options"] = opts
+                    q = questions[max(questions)]
+                    starts_new = re.match(r"^[（(]?1[）)．.、]", line)
+                    q["options"] = opts if starts_new or "options" not in q else q["options"] + opts
                 continue
 
         if mode == "ans":
@@ -72,12 +74,14 @@ def parse_eval_section(md: str) -> tuple[dict, dict]:
 
 
 def _parse_options(line: str) -> list[str]:
-    # 以 ；;、換行 切；每項去掉 (N) 前綴
-    parts = re.split(r"[；;]", line)
+    """依 (1)(2)… 標記切分選項（不論以「；」「。」分隔或分在多行），每項去掉結尾標點。
+    沒有括號標記時，退回以「；」切分。"""
+    marked = list(re.finditer(r"[（(](\d+)[）)]\s*(.*?)(?=[（(]\d+[）)]|$)", line))
+    if marked:
+        return [m.group(2).strip().rstrip("；;。.").strip() for m in marked if m.group(2).strip()]
     opts = []
-    for p in parts:
-        p = p.strip().rstrip("。").strip()
-        p = re.sub(r"^[（(]?\d+[）)]\s*", "", p)
+    for p in re.split(r"[；;]", line):
+        p = re.sub(r"^\d+[．.、]\s*", "", p.strip()).rstrip("。").strip()
         if p:
             opts.append(p)
     return opts

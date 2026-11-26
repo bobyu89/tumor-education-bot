@@ -16,51 +16,70 @@ import re
 from dataclasses import dataclass, field as dc_field
 
 import db
+import departments
+from safety_text import escalation_reply
 
 ESAS_SEVERE = 7   # ESAS-r ≥ 7 視為嚴重
 
 
 # ── 症狀協定 ──────────────────────────────────────────────────────
+# 協定內容放在各科別的設定檔：knowledge/<科別>/manifest.json 的 assessment 區塊（不寫死在程式裡）。
 # escalate_count：特有欄位（次數/天數）達此值也升級；None 表示只看 ESAS 分數
 @dataclass
 class Protocol:
     key: str
     name: str
     keywords: list[str]
-    onc_code: str | None = None
+    doc_code: str | None = None            # 評估後衛教要鎖定的單張代碼
     field_key: str | None = None          # 特有欄位（如 count / days）
     field_question: str | None = None
     escalate_count: int | None = None
-    escalates: bool = True                 # hair_loss 不升級
+    escalates: bool = True                 # 例如落髮不升級
+    high_count: int | None = None          # 特有欄位達此值 → 升級為 HIGH（例：CTCAE v5.0 grade 3）
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Protocol":
+        return cls(key=d["key"], name=d["name"], keywords=list(d["keywords"]),
+                   doc_code=d.get("doc_code"), field_key=d.get("field"),
+                   field_question=d.get("question"), escalate_count=d.get("escalate_count"),
+                   escalates=d.get("escalates", True), high_count=d.get("high_count"))
 
 
-PROTOCOLS: list[Protocol] = [
-    Protocol("nausea", "噁心嘔吐", ["想吐", "噁心", "嘔吐", "反胃", "吐了"],
-             "ONC-21", "count", "這一天下來大概吐了幾次呢？（請給個數字）", escalate_count=5),
-    Protocol("diarrhea", "腹瀉", ["拉肚子", "腹瀉", "一直拉", "水便"],
-             "ONC-22", "count", "今天大概拉了幾次呢？（請給個數字）", escalate_count=6),
-    Protocol("constipation", "便祕", ["便祕", "便秘", "大不出來", "解不出來", "沒排便"],
-             "ONC-23", "days", "已經幾天沒有排便了呢？（請給個數字）", escalate_count=3),
-    Protocol("mucositis", "口腔黏膜炎", ["嘴巴破", "口腔破", "口腔潰瘍", "嘴破", "黏膜"],
-             "ONC-17"),
-    Protocol("neuropathy", "手腳麻木刺痛", ["手麻", "腳麻", "手腳麻", "刺痛", "麻木"],
-             "ONC-38"),
-    Protocol("fatigue", "疲憊", ["很累", "疲憊", "沒力氣", "沒體力", "累到"],
-             "ONC-37"),
-    Protocol("appetite", "食慾不振", ["吃不下", "沒胃口", "沒食慾", "不想吃"],
-             "ONC-21"),
-    Protocol("rash", "皮膚紅疹", ["紅疹", "起疹子", "皮膚癢", "長疹子", "皮膚紅"],
-             "ONC-40"),
-    Protocol("hair_loss", "落髮", ["掉髮", "落髮", "頭髮掉", "頭髮一直掉"],
-             "ONC-24", escalates=False),
-    Protocol("pain", "疼痛", ["好痛", "很痛", "疼痛", "在痛", "痛得"],
-             None),   # 泛用疼痛，無單一 ONC 對應
-]
+_protocol_cache: dict[int, list[Protocol]] = {}
 
+
+def protocols(dept: str | None = None) -> list[Protocol]:
+    """科別的症狀評估協定（未指定用預設科別）。科別設定重新載入時自動更新。"""
+    d = departments.get(dept)
+    key = id(d)
+    if key not in _protocol_cache:
+        _protocol_cache[key] = [Protocol.from_dict(x) for x in d.assessment]
+    return _protocol_cache[key]
+
+
+def get_protocol(key: str, dept: str | None = None) -> Protocol | None:
+    return next((p for p in protocols(dept) if p.key == key), None)
+
+
+# 與舊程式相容：預設科別的協定
+PROTOCOLS: list[Protocol] = protocols()
 _BY_KEY = {p.key: p for p in PROTOCOLS}
 
 # 病患想中止評估的訊號
 _ABORT = ["先不用", "不用了", "算了", "沒事了", "不想說", "跳過", "不用問"]
+
+# 可點選的回覆：長輩不用自己打數字（2026-11 同儕審查，護理審查 minor）。
+# LINE Quick Reply 上限 13 個按鈕；最後一顆一律是「先不用了」（命中 _ABORT，可隨時中止評估）。
+STOP_CHOICE = "先不用了"
+SEVERITY_CHOICES = [str(i) for i in range(11)] + [STOP_CHOICE]
+
+
+def field_choices(proto: "Protocol") -> list[str]:
+    if proto.field_key == "count":
+        return [f"{i}次" for i in range(1, 10)] + ["10次以上", STOP_CHOICE]
+    if proto.field_key == "days":
+        return [f"{i}天" for i in range(1, 7)] + ["7天以上", STOP_CHOICE]
+    return []
 
 
 @dataclass
@@ -71,14 +90,29 @@ class AssessmentResult:
     escalate_level: str = "medium"
     educate: bool = False
     symptom: str | None = None
-    onc_code: str | None = None
+    doc_code: str | None = None
     score: int | None = None
     extra: dict = dc_field(default_factory=dict)
+    choices: list[str] = dc_field(default_factory=list)   # 可點選的回覆（LINE Quick Reply／網頁按鈕）
 
 
 # ── 偵測 ──────────────────────────────────────────────────────────
-def detect_symptom(text: str) -> Protocol | None:
-    for p in PROTOCOLS:
+# 資訊型提問的線索：問預防、假設、原因，而不是在描述當下的不舒服。
+# 例：「化療前要怎麼預防想吐」不該被反問「您會給幾分」（2026-11 同儕審查，護理審查第 6 點）
+INFO_CUES = ["預防", "避免", "會不會", "化療前", "打針前", "如果", "萬一", "要是", "假如",
+             "是什麼", "為什麼", "原因", "什麼時候會", "多久會"]
+# 描述當下狀況的線索：有這些詞就仍然進症狀評估（例：「我一直拉肚子要怎麼避免脫水」）
+PRESENT_CUES = ["一直", "現在", "已經", "今天", "昨天", "這幾天", "好幾天", "剛剛", "目前", "正在"]
+
+
+def is_info_question(text: str) -> bool:
+    return any(c in text for c in INFO_CUES) and not any(c in text for c in PRESENT_CUES)
+
+
+def detect_symptom(text: str, dept: str | None = None) -> Protocol | None:
+    if is_info_question(text):
+        return None                       # 交給一般衛教（RAG），不進 0–10 分評估
+    for p in protocols(dept):
         if any(kw in text for kw in p.keywords):
             return p
     return None
@@ -154,11 +188,11 @@ def start(patient_code: str, proto: Protocol) -> AssessmentResult:
     db.log_event("assessment_start", patient_code, {"symptom": proto.key})
     q = (f"聽起來您有「{proto.name}」的不舒服，我先簡單了解一下狀況。"
          f"如果 0 分是完全不會、10 分是最嚴重，您會給幾分呢？")
-    return AssessmentResult(reply=q, symptom=proto.key)
+    return AssessmentResult(reply=q, symptom=proto.key, choices=SEVERITY_CHOICES)
 
 
-def advance(patient_code: str, state: dict, message: str) -> AssessmentResult:
-    proto = _BY_KEY.get(state["symptom"])
+def advance(patient_code: str, state: dict, message: str, dept: str | None = None) -> AssessmentResult:
+    proto = get_protocol(state["symptom"], dept)
     if proto is None:                       # 資料異常，放棄
         db.clear_assessment_state(patient_code)
         return AssessmentResult(reply="", done=True)
@@ -177,12 +211,13 @@ def advance(patient_code: str, state: dict, message: str) -> AssessmentResult:
         if score is None:
             return AssessmentResult(
                 reply="方便用 0 到 10 的數字告訴我嗎？（0＝完全不會，10＝最嚴重）",
-                symptom=proto.key)
+                symptom=proto.key, choices=SEVERITY_CHOICES)
         data["score"] = score
         # 有特有欄位 → 續問；否則完成
         if proto.field_key:
             db.set_assessment_state(patient_code, proto.key, "ask_field", data)
-            return AssessmentResult(reply=proto.field_question, symptom=proto.key)
+            return AssessmentResult(reply=proto.field_question, symptom=proto.key,
+                                    choices=field_choices(proto))
         return _complete(patient_code, proto, data)
 
     if state["step"] == "ask_field":
@@ -212,21 +247,24 @@ def _complete(patient_code: str, proto: Protocol, data: dict) -> AssessmentResul
                   and proto.field_key in extra
                   and extra[proto.field_key] >= proto.escalate_count)
     escalate = proto.escalates and (over_score or over_count)
+    over_high = (proto.high_count is not None and proto.field_key in extra
+                 and extra[proto.field_key] >= proto.high_count)
+    level = "high" if escalate and over_high else "medium"
 
     db.log_event("assessment_complete", patient_code,
                  {"symptom": proto.key, "score": score, "extra": extra, "escalate": escalate})
 
     if escalate:
-        reply = (f"您的「{proto.name}」聽起來比較嚴重（嚴重度 {score}/10"
-                 f"{'，' + _fmt_field(proto, extra) if _fmt_field(proto, extra) else ''}）。"
-                 f"我已經幫您記錄並通知護理師，請稍候，也可以直接按呼叫鈴。")
+        detail = f"，{_fmt_field(proto, extra)}" if _fmt_field(proto, extra) else ""
+        # 網頁版回覆；LINE 由 chat_service 依管道改寫（含聯絡電話、不承諾即時回覆）
+        reply = escalation_reply("web", proto.name, score, detail, level, "")
         return AssessmentResult(reply=reply, done=True, escalate=True,
-                                escalate_level="medium", symptom=proto.key,
-                                onc_code=proto.onc_code, score=score, extra=extra)
+                                escalate_level=level, symptom=proto.key,
+                                doc_code=proto.doc_code, score=score, extra=extra)
 
     # 未達門檻 → 交回 main.py 走 RAG 衛教
     return AssessmentResult(reply="", done=True, educate=True, symptom=proto.key,
-                            onc_code=proto.onc_code, score=score, extra=extra)
+                            doc_code=proto.doc_code, score=score, extra=extra)
 
 
 def _fmt_field(proto: Protocol, extra: dict) -> str:

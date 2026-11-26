@@ -21,6 +21,7 @@ import sqlite3
 import httpx
 
 import binding
+import db
 from chat_service import _emergency_reply, process_message
 from config import settings
 from db import _now, get_conn
@@ -58,7 +59,36 @@ def first_seen(event_id: str) -> bool:
         return False
 
 
+FAILED = "系統暫時無法處理您的訊息，請稍後再試一次。"
+
+
 async def handle_event(event: dict) -> None:
+    """背景任務入口。webhook 已先回 200 給 LINE，所以這裡失敗時 LINE 不會重送 ——
+    任何例外都必須在這裡接住，至少回病患一則訊息（急症給確定性的緊急指引），不能讓病患石沉大海。"""
+    try:
+        await _handle_event(event)
+    except Exception:
+        logging.exception("[LINE] 事件處理失敗 event_id=%s", event.get("webhookEventId"))
+        await _send_failure_notice(event)
+
+
+async def _send_failure_notice(event: dict) -> None:
+    source = event.get("source") or {}
+    user_id = source.get("userId")
+    if source.get("type") != "user" or not user_id or event.get("type") != "message":
+        return
+    text = ((event.get("message") or {}).get("text") or "").strip()
+    try:
+        db.log_event("line_event_failed", None, {"event_id": event.get("webhookEventId")})
+        flag = redflag_screen(text, use_vector=False)     # 只用確定性的關鍵字層，不依賴任何外部服務
+        body = (_emergency_reply("line", flag.category) if flag.severity == "high"
+                else f"{FAILED}\n如有緊急狀況，{settings.EMERGENCY_CONTACT}。")
+        await send(user_id, event.get("replyToken"), body, urgent=flag.severity == "high")
+    except Exception:
+        logging.exception("[LINE] 連失敗通知都送不出去 user=%s", user_id[:6])
+
+
+async def _handle_event(event: dict) -> None:
     source = event.get("source") or {}
     user_id = source.get("userId")
     if source.get("type") != "user" or not user_id:
@@ -83,13 +113,16 @@ async def handle_event(event: dict) -> None:
         return
 
     resp = await process_message(patient_code, text, channel="line")
-    await send(user_id, reply_token, resp.response, private=True, urgent=resp.is_emergency)
+    await send(user_id, reply_token, resp.response, private=True, urgent=resp.is_emergency,
+               quick_replies=resp.quick_replies)
 
 
 async def _handle_unbound(user_id: str, reply_token: str, text: str) -> None:
     # 尚未綁定、不知道是誰，但急症仍要先給緊急指引
-    if redflag_screen(text, use_vector=False).severity == "high":
-        await send(user_id, reply_token, _emergency_reply("line") + "\n\n" + ASK_CODE, urgent=True)
+    flag = redflag_screen(text, use_vector=False)
+    if flag.severity == "high":
+        await send(user_id, reply_token, _emergency_reply("line", flag.category) + "\n\n" + ASK_CODE,
+                   urgent=True)
         return
     if not binding.looks_like_code(text):        # 打招呼等不算輸錯，避免被鎖
         await send(user_id, reply_token, ASK_CODE)
@@ -103,23 +136,37 @@ async def _handle_unbound(user_id: str, reply_token: str, text: str) -> None:
         await send(user_id, reply_token, INVALID)
 
 
-def build_message(text: str, *, private: bool = False, urgent: bool = False) -> dict:
+QUICK_REPLY_MAX = 13      # LINE Quick Reply 最多 13 個按鈕
+QUICK_LABEL_MAX = 20      # 按鈕文字上限 20 字
+
+
+def build_message(text: str, *, private: bool = False, urgent: bool = False,
+                  quick_replies: list[str] | None = None) -> dict:
     text = text[:MAX_TEXT]
     if not private and not urgent:
-        return {"type": "text", "text": text}
-    alt = "⚠️ 請立即查看：重要提醒" if urgent else "您有一則新的衛教回覆"
-    return {
-        "type": "flex", "altText": alt,
-        "contents": {"type": "bubble", "body": {
-            "type": "box", "layout": "vertical",
-            "contents": [{"type": "text", "text": text, "wrap": True}],
-        }},
-    }
+        msg = {"type": "text", "text": text}
+    else:
+        alt = "⚠️ 請立即查看：重要提醒" if urgent else "您有一則新的衛教回覆"
+        msg = {
+            "type": "flex", "altText": alt,
+            "contents": {"type": "bubble", "body": {
+                "type": "box", "layout": "vertical",
+                "contents": [{"type": "text", "text": text, "wrap": True}],
+            }},
+        }
+    if quick_replies:
+        # 按鈕送出的文字就是按鈕上的字，與病患自己打字走同一條流程（不另開 postback 協定）
+        msg["quickReply"] = {"items": [
+            {"type": "action", "action": {"type": "message", "label": q[:QUICK_LABEL_MAX], "text": q}}
+            for q in quick_replies[:QUICK_REPLY_MAX]
+        ]}
+    return msg
 
 
 async def send(user_id: str, reply_token: str | None, text: str, *,
-               private: bool = False, urgent: bool = False) -> None:
-    msg = build_message(text, private=private, urgent=urgent)
+               private: bool = False, urgent: bool = False,
+               quick_replies: list[str] | None = None) -> None:
+    msg = build_message(text, private=private, urgent=urgent, quick_replies=quick_replies)
     if reply_token and await _post("/reply", {"replyToken": reply_token, "messages": [msg]}):
         return
     await _post("/push", {"to": user_id, "messages": [msg]})

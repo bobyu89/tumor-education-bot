@@ -182,6 +182,34 @@ with TestClient(main.app) as client:
     check("先試 reply，失敗後 push", [p for p, _ in SENT] == ["/reply", "/push"])
     line_bot._post = _fake_post
 
+    print("\n=== 症狀評估附 Quick Reply 按鈕 ===")
+    SENT.clear()
+    hook([text_event("U_new", "我一直拉肚子", "q1")])
+    m = SENT[-1][1]["messages"][0]
+    items = m.get("quickReply", {}).get("items", [])
+    check("問 0–10 分時附 12 個按鈕（0–10＋先不用了）", len(items) == 12
+          and items[0]["action"] == {"type": "message", "label": "0", "text": "0"}
+          and items[-1]["action"]["text"] == "先不用了")
+    check("按鈕數不超過 LINE 上限 13", len(items) <= 13)
+    hook([text_event("U_new", "先不用了", "q2")])
+    check("點「先不用了」→ 中止、不再附按鈕", "quickReply" not in SENT[-1][1]["messages"][0])
+
+    print("\n=== 處理失敗時仍回覆病患（webhook 已回 200，LINE 不會重送）===")
+    _orig_pm = line_bot.process_message
+    async def _boom(*a, **k):
+        raise RuntimeError("模擬下游故障（資料庫或 LLM）")
+    line_bot.process_message = _boom
+    SENT.clear()
+    hook([text_event("U_new", "化療後可以吃什麼", "e6")])
+    check("一般訊息失敗 → 回備援訊息＋緊急電話", "暫時無法處理" in last_text() and "119" in last_text())
+    SENT.clear()
+    hook([text_event("U_new", "我發燒38.5度", "e7")])
+    check("急症訊息失敗 → 仍給確定性的緊急指引（發燒）", "退燒藥" in last_text() and "119" in last_text())
+    line_bot.process_message = _orig_pm
+    with db.get_conn() as conn:
+        n_fail = conn.execute("SELECT COUNT(*) c FROM events WHERE event_type='line_event_failed'").fetchone()["c"]
+    check("失敗留有紀錄可稽核", n_fail == 2)
+
     print("\n=== LOG 有記到綁定 ===")
     log = client.get("/logs/patient/P002", headers=A).json()["items"]
     check("病患 LOG：發出通行碼", any(it["summary"] == "發出 LINE 通行碼" for it in log))

@@ -1,13 +1,18 @@
 """
 研究統計與 CSV 匯出（Phase 3a）。純 DB 讀，不需 API key。
 
-去識別化硬要求：所有查詢只用假名代號（patient_code / pseudonym），
-永不觸碰 patients.real_name。研究匯出 = 天然去識別化。
+去識別化硬要求：所有查詢只用假名代號（patient_code / pseudonym），永不觸碰 patients.real_name。
+
+但「病患自己打的字」可能含個資（2026-11 同儕審查：自由文字不是天然去識別化），所以匯出時
+對病患輸入的內容（messages.content 中 role=patient、alerts.trigger）遮蔽電話、身分證／居留證號、
+email、LINE ID 與長串數字（可能是病歷號）。限制：**人名、地址無法用規則可靠偵測**，
+正式匯出給研究分析前仍需人工抽查。LINE userId 只存在 events 表，不在任何匯出白名單內。
 """
 from __future__ import annotations
 
 import csv
 import io
+import re
 
 from db import get_conn
 
@@ -15,7 +20,7 @@ from db import get_conn
 EXPORT_TABLES = {
     "symptom_scores": ["patient_code", "esas_symptom", "score", "extra", "ts", "source"],
     "messages": ["patient_code", "role", "redflag_level", "answer_quality",
-                 "model_id", "provider", "ts", "content"],
+                 "model_id", "provider", "rag_doc_versions", "ts", "content"],
     "alerts": ["patient_code", "trigger", "level", "ts"],
     "comprehension_checks": ["patient_code", "onc_code", "rating", "ts"],
 }
@@ -110,8 +115,36 @@ def export_csv(table: str) -> str:
     writer = csv.writer(buf)
     writer.writerow(cols)
     for r in rows:
-        writer.writerow([_csv_safe(r[c]) for c in cols])
+        writer.writerow([_csv_safe(_export_value(table, r, c)) for c in cols])
     return buf.getvalue()
+
+
+# ── 匯出前遮蔽病患自行輸入的個資 ─────────────────────────────────
+_PII_PATTERNS = [
+    (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"), "[EMAIL]"),
+    (re.compile(r"(?i)line\s*(?:id)?\s*[:：]?\s*@?[\w.-]{3,}"), "[LINE_ID]"),
+    (re.compile(r"(?<![A-Za-z])[A-Z][1289]\d{8}(?!\d)"), "[ID_NO]"),           # 身分證／居留證號
+    (re.compile(r"(?:\+?886[-\s]?|0)9\d{2}[-\s]?\d{3}[-\s]?\d{3}(?!\d)"), "[PHONE]"),   # 手機
+    (re.compile(r"\(?0\d{1,2}\)?[-\s]?\d{3,4}[-\s]?\d{4}(?!\d)"), "[PHONE]"),        # 市話
+    (re.compile(r"(?<![\d.])\d{7,}(?![\d.])"), "[NUMBER]"),                   # 長串數字（可能是病歷號）
+]
+
+
+def scrub_pii(text):
+    if not isinstance(text, str):
+        return text
+    for pattern, repl in _PII_PATTERNS:
+        text = pattern.sub(repl, text)
+    return text
+
+
+def _export_value(table: str, row, col: str):
+    value = row[col]
+    if table == "messages" and col == "content" and row["role"] == "patient":
+        return scrub_pii(value)
+    if table == "alerts" and col == "trigger":
+        return scrub_pii(value)
+    return value
 
 
 _FORMULA_PREFIX = ("=", "+", "-", "@", "\t", "\r")

@@ -17,6 +17,7 @@ import json
 import os
 import secrets
 import time
+from datetime import datetime, timezone
 
 import logging
 
@@ -33,6 +34,11 @@ else:
                     "正式環境請在 .env 設定固定值。")
 _TOKEN_TTL = 12 * 3600            # 12 小時
 _PBKDF2_ROUNDS = 200_000
+_WS_TICKET_TTL = 60               # 護理端 WebSocket 連線票券：60 秒內有效
+
+
+class LoginLocked(Exception):
+    """同一帳號短時間內連續登入失敗太多次，暫時鎖定（2026-11 同儕審查：原本可無限次猜密碼）。"""
 
 
 # ── 密碼雜湊 ──────────────────────────────────────────────────────
@@ -74,8 +80,8 @@ def create_user(account: str, password: str, role: str,
             conn.execute(
                 """INSERT INTO patients
                    (user_id, pseudonym, real_name, age, gender, cancer_type,
-                    diagnosis, medications, education_level, created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    diagnosis, medications, education_level, department, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     uid, pseudonym or account,
                     patient_fields.get("real_name"),
@@ -85,6 +91,7 @@ def create_user(account: str, password: str, role: str,
                     json.dumps(patient_fields.get("diagnosis", []), ensure_ascii=False),
                     json.dumps(patient_fields.get("medications", []), ensure_ascii=False),
                     patient_fields.get("education_level", "general"),
+                    patient_fields.get("department"),
                     _now(),
                 ),
             )
@@ -93,8 +100,28 @@ def create_user(account: str, password: str, role: str,
 
 
 # ── 登入與 token ──────────────────────────────────────────────────
+def _recent_failures(account: str) -> int:
+    """最近 LOGIN_LOCK_MINUTES 分鐘內、上次成功登入之後的失敗次數（依 events 表計算，重啟不歸零）。"""
+    since = datetime.fromtimestamp(time.time() - settings.LOGIN_LOCK_MINUTES * 60, timezone.utc).isoformat()
+    with get_conn() as conn:
+        last_ok = conn.execute(
+            "SELECT MAX(ts) AS t FROM events WHERE event_type='login' AND actor=?", (account,)
+        ).fetchone()["t"]
+        start = max(since, last_ok or "")
+        return conn.execute(
+            "SELECT COUNT(*) AS c FROM events WHERE event_type='login_failed' AND actor=? AND ts > ?",
+            (account, start),
+        ).fetchone()["c"]
+
+
 def authenticate(account: str, password: str) -> dict | None:
-    """驗證帳密，成功回傳 {token, role, account, patient_code}。"""
+    """驗證帳密，成功回傳 {token, role, account, patient_code}；失敗回 None；鎖定中丟 LoginLocked。
+
+    鎖定以「帳號」為單位（不存在的帳號也計數，避免藉此探測帳號是否存在）。
+    代價：有人故意打錯別人的帳號，可讓對方暫時無法登入 —— 時間短（預設 15 分鐘），且留有紀錄。"""
+    if _recent_failures(account) >= settings.LOGIN_MAX_FAILURES:
+        log_event("login_locked", None, {"account": account}, actor=account)
+        raise LoginLocked(account)
     with get_conn() as conn:
         row = conn.execute(
             "SELECT id, password_hash, role FROM users WHERE account=?", (account,)
@@ -126,8 +153,37 @@ def _make_token(account: str, role: str, patient_code: str | None) -> str:
     return f"{body}.{sig}"
 
 
+def _sign(payload: dict) -> str:
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    sig = hmac.new(_SECRET, body.encode(), hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+
+def make_ws_ticket(user: dict) -> str:
+    """護理端 WebSocket 用的短效票券。瀏覽器的 WebSocket 不能帶自訂 header，憑證只能放在網址，
+    而網址常被寫進伺服器／代理的存取紀錄 —— 所以網址裡放的是 60 秒就失效、且不能拿來呼叫 API 的票券，
+    不再放 12 小時有效的登入 token（2026-11 同儕審查）。"""
+    return _sign({"account": user["account"], "role": user["role"], "typ": "ws_ticket",
+                  "exp": int(time.time()) + _WS_TICKET_TTL})
+
+
+def verify_ws_ticket(ticket: str) -> dict | None:
+    payload = _verify_signed(ticket)
+    if not payload or payload.get("typ") != "ws_ticket":
+        return None
+    return payload
+
+
 def verify_token(token: str) -> dict | None:
-    """驗證 token 簽章與到期，回傳 payload 或 None。"""
+    """驗證登入 token（API 用）。WebSocket 票券（typ=ws_ticket）不可當登入 token 使用。"""
+    payload = _verify_signed(token)
+    if not payload or payload.get("typ"):
+        return None
+    return payload
+
+
+def _verify_signed(token: str) -> dict | None:
+    """驗證簽章與到期，回傳 payload 或 None。"""
     try:
         body, sig = token.split(".")
         expected = hmac.new(_SECRET, body.encode(), hashlib.sha256).hexdigest()

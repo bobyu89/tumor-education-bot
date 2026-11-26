@@ -4,60 +4,134 @@
 (function (root) {
   'use strict';
 
-  // ── 紅旗（redflag.py）────────────────────────────────────────
-  var HIGH_PHYSICAL = ['胸痛', '胸悶', '喘不過氣', '呼吸困難', '心跳很快', '心悸很嚴重',
-    '手腳無力', '說話不清楚', '突然頭痛', '暈倒', '失去意識',
-    '跌倒了', '流很多血', '大量出血', '骨折',
-    '全身起疹子', '臉腫起來', '喉嚨腫', '吞不下'];
-  var HIGH_SELF_HARM = ['想死', '不想活', '活不下去', '自殺', '傷害自己', '結束生命',
-    '撐不下去', '活著好累', '沒有意義'];
-  var MEDIUM = ['很痛', '痛很久', '發高燒', '高燒', '吐很多次', '一直吐', '一直拉肚子',
-    '藥吃錯了', '忘記吃藥', '血糖很高', '血壓很高', '傷口紅腫', '尿尿有血', '血便'];
-  var NEGATION = ['沒有', '沒', '不會', '不再', '未', '無', '如果', '假如', '萬一', '怕', '擔心會', '避免'];
-  var NEG_WINDOW = 8;
-
-  function negated(text, kw) {
-    var idx = text.indexOf(kw);
-    while (idx !== -1) {
-      var win = text.slice(Math.max(0, idx - NEG_WINDOW), idx);
-      if (!NEGATION.some(function (n) { return win.indexOf(n) !== -1; })) return false;
-      idx = text.indexOf(kw, idx + 1);
-    }
-    return true;
+  // ── 紅旗（redflag.py v2）─────────────────────────────────────
+  // 規則（詞庫、否定詞、假設語境、體溫樣式）一律來自 data.redflag —— 由 scripts/build_pages.py
+  // 從 backend/redflag.py 匯出，演示引擎不另外手抄，避免兩邊分歧。邏輯對應 redflag._keyword_screen；
+  // 一致性由 scripts/test_pages_engine.js 以 backend/redflag_cases.json 驗證。
+  var _rfCache = null;
+  function rf(data) {
+    if (_rfCache && _rfCache.src === data.redflag) return _rfCache;
+    var R = data.redflag;
+    _rfCache = {
+      src: R,
+      split: new RegExp(R.clauseSplit, 'g'),
+      temp: new RegExp(R.tempRe, 'g'), tempCtx: new RegExp(R.tempCtxRe, 'g'), zh: new RegExp(R.zhTempRe, 'g')
+    };
+    return _rfCache;
   }
+  function normalizeText(t) { return String(t || '').normalize('NFKC').replace(/\s+/g, '').toLowerCase(); }
+  function splitClauses(t, data) { return t.split(rf(data).split).filter(function (c) { return c; }); }
+  function findAll(clause, pat) {
+    var out = [];
+    if (pat.indexOf('re:') === 0) {
+      var re = new RegExp(pat.slice(3), 'g'), m;
+      while ((m = re.exec(clause)) !== null) { out.push({ pos: m.index, label: m[0] }); if (m[0] === '') re.lastIndex++; }
+      return out;
+    }
+    var i = clause.indexOf(pat);
+    while (i !== -1) { out.push({ pos: i, label: pat }); i = clause.indexOf(pat, i + 1); }
+    return out;
+  }
+  function endsWith(s, x) { return s.length >= x.length && s.slice(s.length - x.length) === x; }
+  function immediatelyNegated(prefix, R) {
+    var p = prefix, changed = true;
+    while (changed && p) {
+      changed = false;
+      for (var i = 0; i < R.fillers.length; i++) {
+        if (endsWith(p, R.fillers[i])) { p = p.slice(0, p.length - R.fillers[i].length); changed = true; }
+      }
+    }
+    return R.negCues.some(function (n) { return endsWith(p, n); });
+  }
+  function suppressed(clause, pos, R) {
+    var prefix = clause.slice(0, pos);
+    if (R.hypothetical.some(function (h) { return prefix.indexOf(h) !== -1; })) return true;
+    return immediatelyNegated(prefix, R);
+  }
+  function matchRules(clauses, rules, R) {
+    var hits = [];
+    rules.forEach(function (rule) {
+      var cat = rule[0], pat = rule[1];
+      for (var c = 0; c < clauses.length; c++) {
+        var cl = clauses[c];
+        var hit = findAll(cl, pat).filter(function (h) { return !suppressed(cl, h.pos, R); })[0];
+        if (hit) { hits.push([cat, hit.label]); break; }
+      }
+    });
+    return hits;
+  }
+  function parseTemperature(clause, data) {
+    var R = data.redflag, X = rf(data), vals = [], m;
+    if (R.ambient.some(function (a) { return clause.indexOf(a) !== -1; })) return null;
+    [X.temp, X.tempCtx].forEach(function (re) {
+      re.lastIndex = 0;
+      while ((m = re.exec(clause)) !== null) vals.push(parseFloat(m[1]));
+    });
+    if (/度|燒|溫/.test(clause)) {
+      X.zh.lastIndex = 0;
+      while ((m = X.zh.exec(clause)) !== null) vals.push(R.zhNum[m[1]] + (m[2] ? 0.5 : 0));
+    }
+    vals = vals.filter(function (v) { return v >= 35 && v <= 43; });
+    return vals.length ? Math.max.apply(null, vals) : null;
+  }
+  function fmtTemp(t) { return String(Math.round(t * 10) / 10); }
+  function temperatureScreen(clauses, data) {
+    var R = data.redflag, best = null;
+    clauses.forEach(function (cl) {
+      var t = parseTemperature(cl, data);
+      if (t === null) return;
+      var m = /\d|三十|四十/.exec(cl);
+      if (m && immediatelyNegated(cl.slice(0, m.index), R)) return;
+      if (R.hypothetical.some(function (h) { return cl.indexOf(h) !== -1; })) return;
+      if (best === null || t > best) best = t;
+    });
+    if (best === null) return null;
+    // 門檻依科別設定（data.redflag.tempHigh／tempMedium；null 代表不判）
+    if (R.tempHigh != null && best >= R.tempHigh) return ['high', '體溫' + fmtTemp(best) + '°C'];
+    if (R.tempMedium != null && best >= R.tempMedium) return ['medium', '體溫' + fmtTemp(best) + '°C'];
+    return null;
+  }
+  function uniq(a) { return a.filter(function (x, i) { return a.indexOf(x) === i; }); }
 
-  function screenRedFlag(text) {
-    var self = HIGH_SELF_HARM.filter(function (k) { return text.indexOf(k) !== -1; });
-    if (self.length) return { severity: 'high', keywords: self, kind: 'self_harm' };
-    var phys = HIGH_PHYSICAL.filter(function (k) { return text.indexOf(k) !== -1 && !negated(text, k); });
-    if (phys.length) return { severity: 'high', keywords: phys, kind: 'physical' };
-    var med = MEDIUM.filter(function (k) { return text.indexOf(k) !== -1 && !negated(text, k); });
-    if (med.length) return { severity: 'medium', keywords: med, kind: 'medium' };
-    return { severity: 'none', keywords: [], kind: 'none' };
+  function screenRedFlag(text, data) {
+    var R = data.redflag, norm = normalizeText(text), cl = splitClauses(norm, data);
+    var self = R.selfHarm.filter(function (k) { return norm.indexOf(k) !== -1; });
+    if (self.length) return { severity: 'high', keywords: self, kind: 'self_harm', category: 'self_harm' };
+    var temp = temperatureScreen(cl, data);
+    var high = matchRules(cl, R.high, R);
+    if (temp && temp[0] === 'high') high.unshift(['fever', temp[1]]);
+    if (high.length) return { severity: 'high', keywords: uniq(high.map(function (h) { return h[1]; })), kind: 'physical', category: high[0][0] };
+    var med = matchRules(cl, R.medium, R);
+    if (temp && temp[0] === 'medium') med.unshift(['fever', temp[1]]);
+    if (med.length) return { severity: 'medium', keywords: uniq(med.map(function (h) { return h[1]; })), kind: 'medium', category: med[0][0] };
+    return { severity: 'none', keywords: [], kind: 'none', category: 'none' };
   }
 
   // ── 症狀評估（assessment.py）─────────────────────────────────
   var ESAS_SEVERE = 7;
-  var PROTOCOLS = [
-    { key: 'nausea', name: '噁心嘔吐', keywords: ['想吐', '噁心', '嘔吐', '反胃', '吐了'], onc: 'ONC-21', field: 'count', question: '這一天下來大概吐了幾次呢？（請給個數字）', escalateCount: 5, escalates: true },
-    { key: 'diarrhea', name: '腹瀉', keywords: ['拉肚子', '腹瀉', '一直拉', '水便'], onc: 'ONC-22', field: 'count', question: '今天大概拉了幾次呢？（請給個數字）', escalateCount: 6, escalates: true },
-    { key: 'constipation', name: '便祕', keywords: ['便祕', '便秘', '大不出來', '解不出來', '沒排便'], onc: 'ONC-23', field: 'days', question: '已經幾天沒有排便了呢？（請給個數字）', escalateCount: 3, escalates: true },
-    { key: 'mucositis', name: '口腔黏膜炎', keywords: ['嘴巴破', '口腔破', '口腔潰瘍', '嘴破', '黏膜'], onc: 'ONC-17', escalates: true },
-    { key: 'neuropathy', name: '手腳麻木刺痛', keywords: ['手麻', '腳麻', '手腳麻', '刺痛', '麻木'], onc: 'ONC-38', escalates: true },
-    { key: 'fatigue', name: '疲憊', keywords: ['很累', '疲憊', '沒力氣', '沒體力', '累到'], onc: 'ONC-37', escalates: true },
-    { key: 'appetite', name: '食慾不振', keywords: ['吃不下', '沒胃口', '沒食慾', '不想吃'], onc: 'ONC-21', escalates: true },
-    { key: 'rash', name: '皮膚紅疹', keywords: ['紅疹', '起疹子', '皮膚癢', '長疹子', '皮膚紅'], onc: 'ONC-40', escalates: true },
-    { key: 'hair_loss', name: '落髮', keywords: ['掉髮', '落髮', '頭髮掉', '頭髮一直掉'], onc: 'ONC-24', escalates: false },
-    { key: 'pain', name: '疼痛', keywords: ['好痛', '很痛', '疼痛', '在痛', '痛得'], onc: null, escalates: true }
-  ];
-  var BY_KEY = {};
-  PROTOCOLS.forEach(function (p) { BY_KEY[p.key] = p; });
+  // 症狀評估協定來自 data.protocols（scripts/build_pages.py 從預設科別的 knowledge/<科別>/manifest.json 匯出），
+  // 不在引擎裡另外手抄。
+  function protocolsOf(data) { return (data && data.protocols) || []; }
+  function protocolByKey(data, key) {
+    var list = protocolsOf(data);
+    for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i];
+    return null;
+  }
   var ABORT = ['先不用', '不用了', '算了', '沒事了', '不想說', '跳過', '不用問'];
   var CN = { '零': 0, '一': 1, '兩': 2, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9 };
 
-  function detectSymptom(text) {
-    for (var i = 0; i < PROTOCOLS.length; i++) {
-      if (PROTOCOLS[i].keywords.some(function (k) { return text.indexOf(k) !== -1; })) return PROTOCOLS[i];
+  // 資訊型提問（預防、假設、原因）且沒有描述當下狀況 → 不進評估。線索來自 data.assessmentCues（assessment.py 匯出）
+  function isInfoQuestion(text, data) {
+    var C = data && data.assessmentCues;
+    if (!C) return false;
+    var has = function (list) { return list.some(function (k) { return text.indexOf(k) !== -1; }); };
+    return has(C.info) && !has(C.present);
+  }
+  function detectSymptom(text, data) {
+    if (isInfoQuestion(text, data)) return null;
+    var list = protocolsOf(data);
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].keywords.some(function (k) { return text.indexOf(k) !== -1; })) return list[i];
     }
     return null;
   }
@@ -130,7 +204,7 @@
   }
   var MIN_SCORE = 0.2;   // 低於此視為「無可用來源」→ 品質閘轉介
 
-  var DEFLECT_TEXT = '這個問題我需要請護理師為您解答，我先幫您記錄下來，護理師會盡快回覆您。';
+  // 病患端固定文字一律來自 data.safetyText（由 backend/safety_text.py 匯出）
 
   // ── 生成（對應 MockClient）───────────────────────────────────
   function sentences(text) {
@@ -158,7 +232,10 @@
   }
 
   // ── 對話流程（main.py /chat）─────────────────────────────────
-  var HIGH_REPLY = '這個狀況需要馬上讓護理師或醫師知道，請按旁邊的呼叫鈴，我已經同時通知護理站了。若情況緊急請直接撥打護理站電話或119。';
+  function highReply(data, category) {
+    var t = data.safetyText.emergency;
+    return t[category] || t.other;
+  }
 
   function createSession(patient) {
     return { patient: patient, messages: [], assessment: null, scores: [], alerts: [], quiz: [], events: [] };
@@ -171,24 +248,24 @@
     s.messages.push({ role: 'patient', text: text, ts: now() });
 
     // ① 紅旗
-    var flag = screenRedFlag(text);
+    var flag = screenRedFlag(text, data);
     trace.push({ step: '① 紅旗篩檢', result: flag.severity === 'none' ? '未命中' :
       (flag.severity.toUpperCase() + '（' + flag.keywords.join('、') + (flag.kind === 'self_harm' ? '；自傷類不套否定規則' : '') + '）') });
     if (flag.severity === 'high') {
       s.alerts.push({ ts: now(), level: 'high', trigger: flag.keywords.join('；'), type: 'EMERGENCY_ALERT', message: text });
       log(s, 'redflag_high', { terms: flag.keywords });
       trace.push({ step: '短路', result: '立刻推播護理站 + 固定安全回覆，不進 RAG／LLM' });
-      resp = { reply: HIGH_REPLY, sources: [], emergency: true, level: 'high', keywords: flag.keywords, quality: 'redflag_shortcut', trace: trace };
+      resp = { reply: highReply(data, flag.category), sources: [], emergency: true, level: 'high', keywords: flag.keywords, quality: 'redflag_shortcut', trace: trace };
       s.messages.push({ role: 'bot', text: resp.reply, ts: now(), resp: resp });
       return resp;
     }
     var mediumAlert = function () {
-      if (flag.severity === 'medium') s.alerts.push({ ts: now(), level: 'medium', trigger: flag.keywords.join('；'), type: 'MEDIUM_FLAG', message: text, silent: true });
+      if (flag.severity === 'medium') s.alerts.push({ ts: now(), level: 'medium', trigger: flag.keywords.join('；'), type: 'MEDIUM_FLAG', message: text });   // v2：MEDIUM 也推播、進未確認清單
     };
 
     // ② 症狀評估
     if (s.assessment) {
-      var st = s.assessment, proto = BY_KEY[st.symptom];
+      var st = s.assessment, proto = protocolByKey(data, st.symptom);
       if (has(text, ABORT)) {
         s.assessment = null; log(s, 'assessment_abort', { symptom: proto.key });
         trace.push({ step: '② 症狀評估', result: '病患中止，清除狀態' });
@@ -214,7 +291,7 @@
         return complete(s, proto, st.data, trace, flag, data, mediumAlert);
       }
     } else {
-      var p = detectSymptom(text);
+      var p = detectSymptom(text, data);
       if (p) {
         s.assessment = { symptom: p.key, step: 'ask_severity', data: {} };
         log(s, 'assessment_start', { symptom: p.key });
@@ -236,13 +313,15 @@
     var overScore = score !== null && score >= ESAS_SEVERE;
     var overCount = proto.escalateCount != null && extra[proto.field] != null && extra[proto.field] >= proto.escalateCount;
     var escalate = proto.escalates && (overScore || overCount);
+    var overHigh = proto.highCount != null && extra[proto.field] != null && extra[proto.field] >= proto.highCount;
+    var level = escalate && overHigh ? 'high' : 'medium';
     log(s, 'assessment_complete', { symptom: proto.key, score: score, extra: extra, escalate: escalate });
     var fieldTxt = extra[proto.field] != null ? ('，' + (proto.field === 'count' ? '次數約 ' : '天數約 ') + extra[proto.field] + (proto.field === 'count' ? ' 次' : ' 天')) : '';
     if (escalate) {
-      s.alerts.push({ ts: now(), level: 'medium', trigger: proto.key + ':' + score, type: 'SYMPTOM_ALERT', message: proto.name + ' 嚴重度 ' + score + '/10' + fieldTxt });
-      trace.push({ step: '② 症狀評估', result: '達門檻（≥' + ESAS_SEVERE + ' 分' + (proto.escalateCount ? '或 ≥' + proto.escalateCount + ' ' + (proto.field === 'count' ? '次' : '天') : '') + '）→ 升級、推播護理站' });
-      var reply = '您的「' + proto.name + '」聽起來比較嚴重（嚴重度 ' + score + '/10' + fieldTxt + '）。我已經幫您記錄並通知護理師，請稍候，也可以直接按呼叫鈴。';
-      var resp = { reply: reply, sources: [], emergency: true, level: 'medium', keywords: [proto.key], quality: 'assessment_escalated', trace: trace };
+      s.alerts.push({ ts: now(), level: level, trigger: proto.key + ':' + score, type: 'SYMPTOM_ALERT', message: proto.name + ' 嚴重度 ' + score + '/10' + fieldTxt });
+      trace.push({ step: '② 症狀評估', result: '達門檻（≥' + ESAS_SEVERE + ' 分' + (proto.escalateCount ? '或 ≥' + proto.escalateCount + ' ' + (proto.field === 'count' ? '次' : '天') : '') + '）→ 升級' + (level === 'high' ? ' HIGH（CTCAE grade 3）' : '') + '、推播護理站' });
+      var reply = '您的「' + proto.name + '」聽起來比較嚴重（嚴重度 ' + score + '/10' + fieldTxt + '）。' + (level === 'high' ? data.safetyText.escalation_high_note : '') + data.safetyText.escalation_suffix_web;
+      var resp = { reply: reply, sources: [], emergency: true, level: level, keywords: [proto.key], quality: 'assessment_escalated', trace: trace };
       s.messages.push({ role: 'bot', text: reply, ts: now(), resp: resp });
       return resp;
     }
@@ -258,7 +337,7 @@
     trace.push({ step: '③ 檢索', result: (code ? '鎖定 ' + code + '；' : '') + (docs.length ? docs.slice(0, 3).map(function (d) { return d.code + '／' + d.section + '（' + d.score + '）'; }).join('、') : '無結果') });
     if (!good.length) {
       trace.push({ step: '④ 品質閘', result: '無合格來源（<' + MIN_SCORE + '）→ 不進 LLM，固定轉介文字' });
-      return finish(s, DEFLECT_TEXT, [], 'deflected_no_source', trace, flag, mediumAlert);
+      return finish(s, data.safetyText.deflect, [], 'deflected_no_source', trace, flag, mediumAlert);
     }
     var text = compose(good, s.patient.tone);
     trace.push({ step: '④ 生成', result: '規則組裝（' + s.patient.tone + ' 語氣）；正式版由 LLM 依病患年齡／教育程度改寫' });
@@ -300,8 +379,8 @@
   var Engine = {
     screenRedFlag: screenRedFlag, detectSymptom: detectSymptom, parseSeverity: parseSeverity,
     extractCount: extractCount, retrieve: retrieve, compose: compose, createSession: createSession,
-    chat: chat, quizQuestions: quizQuestions, quizScore: quizScore, PROTOCOLS: PROTOCOLS,
-    MIN_SCORE: MIN_SCORE, DEFLECT_TEXT: DEFLECT_TEXT, HIGH_REPLY: HIGH_REPLY
+    chat: chat, quizQuestions: quizQuestions, quizScore: quizScore, protocolsOf: protocolsOf,
+    MIN_SCORE: MIN_SCORE, highReply: highReply, normalizeText: normalizeText
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = Engine;
   else root.DemoEngine = Engine;

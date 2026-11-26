@@ -12,7 +12,7 @@
   5. chunk 附帶 section 欄位，回答時可標示「出自 ONC-17 的『預防與治療』」。
 
 用法：
-    python -X utf8 scripts/index_vault.py            # 增量（預設）
+    python -X utf8 scripts/index_vault.py            # 同步（預設）：新增新段落、刪除舊版與停用單張的段落
     python -X utf8 scripts/index_vault.py --rebuild  # 砍掉重建
 """
 
@@ -28,28 +28,28 @@ from pathlib import Path
 
 # ── 設定 ──────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
-VAULT_DIR = ROOT / "Obsidian_Vault" / "衛教知識庫"
+sys.path.insert(0, str(ROOT / "backend"))
+import departments  # noqa: E402  科別註冊表（只用標準函式庫）
+import embedding  # noqa: E402  嵌入模型註冊表（與 rag.py 查詢共用）
+
+VAULT_DIR = ROOT / "Obsidian_Vault" / "衛教知識庫"   # 血液腫瘤科單張；各科來源以 manifest 的 source_dir 為準
 CHROMA_PATH = ROOT / "chroma_db"
 COLLECTION_NAME = "patient_education"
-EMBED_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 REPORT_PATH = ROOT / "Obsidian_Vault" / "專案管理" / "索引報告.md"
 
 # 這些章節不進向量庫
 EXCLUDED_SECTIONS = {"參考資料", "護理指導評值"}
 
-# chunk 大小上限（字元）。超過的章節會再依段落切分。
-#
-# ⚠️ 這個數字不是隨便選的：paraphrase-multilingual-MiniLM-L12-v2 的 max_seq_length
-# 只有 128 tokens，超過的部分會被 tokenizer 靜默截斷。實測本知識庫的中文約
-# 1.35 字/token，128 tokens ≈ 173 字。
-#
-# 舊版 indexer.py 用 400 字元切 ≈ 295 tokens → 每個長 chunk 有約 57% 的內容
-# 從未進入向量、搜不到（但 document 仍存完整 400 字，一旦命中又會整段餵給 LLM）。
-MAX_CHUNK = 170
+# 切段時避免產生的碎片長度（字元）
 MIN_CHUNK = 40
 
-# 模型真實上限，用於索引後的驗證
-MODEL_MAX_TOKENS = 128
+# 每段的 token 上限（含主題前綴），依檢索模型而定（backend/embedding.py 的 MODELS）。
+# 一律用模型真正的 tokenizer 量，不用字元數猜：中文的數字、英文與標點 token 密度差很多。
+# 舊版用 400 字元切、模型只讀 128 token → 長段落有一半以上的內容從未進入向量。
+SPEC = embedding.get_spec()
+EMBED_MODEL = SPEC.name
+MODEL_MAX_TOKENS = SPEC.chunk_tokens - (
+    embedding.make_token_counter()(SPEC.passage_prefix) - 2 if SPEC.passage_prefix else 0)
 
 
 # ── 資料結構 ──────────────────────────────────────────────────────
@@ -63,6 +63,7 @@ class Chunk:
     section: str
     source: str
     doc_version: str
+    dept: str = ""
 
 
 # ── Frontmatter 解析（不依賴 PyYAML）────────────────────────────────
@@ -154,7 +155,9 @@ def chunk_section(name: str, content: str, fits) -> list[str]:
     切割優先序：段落（空行）→ 句子（。！？；）→ 硬切。
     """
     content = clean_markdown(content)
-    if len(content) < MIN_CHUNK:
+    # 短章節整段保留：例如一句「發燒請立即就醫」的「何時通知醫護人員」章節絕不能被丟掉。
+    # （舊版把少於 MIN_CHUNK 字的整個章節直接捨棄；MIN_CHUNK 只該用在切割時避免碎片。）
+    if not content:
         return []
     if fits(content):
         return [content]
@@ -183,131 +186,98 @@ def chunk_section(name: str, content: str, fits) -> list[str]:
                             stack.extend([cur[mid:], cur[:mid]])
         return units
 
+    # 不丟任何文字：短於 MIN_CHUNK 的零頭先嘗試併入前一段，放不下就自成一段。
+    # （舊版直接捨棄零頭，實測 ONC-23「年齡因素」與 ONC-35「內關穴位置」共 62 字從未進入知識庫。）
     out: list[str] = []
     buf = ""
+
+    def flush(piece: str):
+        if not piece:
+            return
+        if out and len(piece) < MIN_CHUNK and fits(f"{out[-1]}\n{piece}"):
+            out[-1] = f"{out[-1]}\n{piece}"
+        else:
+            out.append(piece)
+
     for unit in split_units(content):
         cand = f"{buf}\n{unit}" if buf else unit
         if fits(cand):
             buf = cand
         else:
-            if len(buf) >= MIN_CHUNK:
-                out.append(buf)
+            flush(buf)
             buf = unit
-    if len(buf) >= MIN_CHUNK:
-        out.append(buf)
+    flush(buf)
     return out
 
 
-# ── 嵌入函式 ──────────────────────────────────────────────────────
-#
-# 優先用 sentence-transformers（架構書指定的做法）。
-# 若 torch 無法載入（例如 Windows 11 的 Smart App Control 會封鎖 torch 未簽章的
-# DLL，拋 WinError 4551），改用 onnxruntime 跑同一個模型的 ONNX 權重。
-# 兩條路徑用的是相同的權重與相同的 mean-pooling，產生的向量可互換。
-
-ONNX_DIR = ROOT / "models" / "paraphrase-multilingual-MiniLM-L12-v2"
-ONNX_REPO = "https://huggingface.co/Xenova/paraphrase-multilingual-MiniLM-L12-v2/resolve/main"
-
-
-class OnnxMiniLMEmbedder:
-    """用 onnxruntime 重現 SentenceTransformer(paraphrase-multilingual-MiniLM-L12-v2)。
-
-    pooling = mean（依 attention_mask 加權），與該模型 1_Pooling/config.json 一致；
-    不做 L2 normalize，與 chromadb SentenceTransformerEmbeddingFunction 的預設一致。
-    集合使用 cosine 距離，正規化與否不影響排序。
-    """
-
-    def __init__(self) -> None:
-        import urllib.request
-        import numpy as np
-        import onnxruntime as ort
-        from tokenizers import Tokenizer
-
-        self.np = np
-        ONNX_DIR.mkdir(parents=True, exist_ok=True)
-        for remote, local in [("tokenizer.json", "tokenizer.json"),
-                              ("onnx/model.onnx", "model.onnx")]:
-            dest = ONNX_DIR / local
-            if not dest.exists():
-                print(f"  下載 {local} …")
-                urllib.request.urlretrieve(f"{ONNX_REPO}/{remote}?download=true", dest)
-
-        self.tok = Tokenizer.from_file(str(ONNX_DIR / "tokenizer.json"))
-        self.tok.enable_truncation(max_length=MODEL_MAX_TOKENS)
-        self.tok.enable_padding(pad_id=1, pad_token="<pad>")  # XLM-R pad id = 1
-        self.sess = ort.InferenceSession(
-            str(ONNX_DIR / "model.onnx"), providers=["CPUExecutionProvider"]
-        )
-
-    def name(self) -> str:                      # chromadb EmbeddingFunction 介面
-        return "onnx-paraphrase-multilingual-MiniLM-L12-v2"
-
-    # chromadb >= 1.5 除了 __call__ 還會呼叫這兩個。
-    # 本模型 query 與 document 用同一種編碼（不像 e5 需要 query:/passage: 前綴），
-    # 所以兩者都直接轉呼叫 __call__。
-    def embed_documents(self, input: list[str]) -> list[list[float]]:
-        return self(input)
-
-    def embed_query(self, input: list[str]) -> list[list[float]]:
-        return self(input)
-
-    def __call__(self, input: list[str]) -> list[list[float]]:
-        np = self.np
-        encs = self.tok.encode_batch(input)
-        ids = np.array([e.ids for e in encs], dtype=np.int64)
-        mask = np.array([e.attention_mask for e in encs], dtype=np.int64)
-        out = self.sess.run(
-            ["last_hidden_state"],
-            {"input_ids": ids, "attention_mask": mask,
-             "token_type_ids": np.zeros_like(ids)},
-        )[0]
-        # mean pooling，只算真實 token
-        m = mask[..., None].astype(np.float32)
-        summed = (out * m).sum(axis=1)
-        counts = np.clip(m.sum(axis=1), 1e-9, None)
-        return (summed / counts).tolist()
-
-
+# ── 嵌入函式：與 rag.py 查詢共用 backend/embedding.py，確保建庫與查詢是同一個模型 ──
 def make_embedding_function():
-    try:
-        from chromadb.utils import embedding_functions
-        ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
-        print(f"嵌入後端：sentence-transformers（{EMBED_MODEL}）")
-        return ef
-    except Exception as e:
-        print(f"嵌入後端：改用 ONNX —— sentence-transformers 無法載入")
-        print(f"  原因：{type(e).__name__}: {str(e)[:120]}")
-        ef = OnnxMiniLMEmbedder()
-        print(f"  已載入 {ef.name()}")
-        return ef
+    ef = embedding.make_embedding_function()
+    print(f"嵌入模型：{ef.spec.name}（段落上限 {MODEL_MAX_TOKENS} tokens）")
+    return ef
 
 
 def get_token_counter():
-    """回傳 count_tokens(text) -> int，用真正的模型 tokenizer。"""
-    import urllib.request
-    from tokenizers import Tokenizer
+    """回傳 count_tokens(text) -> int，用檢索模型真正的 tokenizer。"""
+    return embedding.make_token_counter()
 
-    ONNX_DIR.mkdir(parents=True, exist_ok=True)
-    tok_path = ONNX_DIR / "tokenizer.json"
-    if not tok_path.exists():
-        print("  下載 tokenizer.json（切割需要精確 token 量測）…")
-        urllib.request.urlretrieve(f"{ONNX_REPO}/tokenizer.json?download=true", tok_path)
 
-    tok = Tokenizer.from_file(str(tok_path))
-    tok.no_truncation()   # 要量真實長度，不能讓它先截斷
-    tok.no_padding()
-    return lambda text: len(tok.encode(text).ids)
+# ── 同步：讓向量庫與單張目前的狀態完全一致 ────────────────────────
+def sync_collection(col, chunks: list[Chunk], batch_size: int = 32, embed=None) -> dict:
+    """把集合同步成「剛好等於這次切出的 chunks」。
+
+    v1 的增量模式只新增、從不刪除：單張改版後，舊版段落仍留在向量庫，可能被拿來回答。
+    現在以 chunk ID（含單張代碼、版本、章節與內容）比對：
+      - 這次沒有、集合裡有 → 刪除（單張改版的舊段落、已移除或 rag_index 改為 false 的單張）
+      - 這次有、集合裡沒有 → 新增
+    embed：段落嵌入函式（加段落前綴）；未提供時由集合自己的 embedding_function 處理（測試用）。
+    """
+    if not chunks:
+        # 防呆：沒有任何可索引的單張時，不要把整個向量庫清空
+        raise SystemExit("這次沒有切出任何 chunk（全部單張都被略過？）—— 為避免清空向量庫，停止同步")
+    wanted = {c.id: c for c in chunks}
+    existing = set(col.get(include=[])["ids"]) if col.count() else set()
+    stale = sorted(existing - wanted.keys())
+    new = [c for cid, c in wanted.items() if cid not in existing]
+
+    for i in range(0, len(stale), batch_size):
+        col.delete(ids=stale[i : i + batch_size])
+    for i in range(0, len(new), batch_size):
+        batch = new[i : i + batch_size]
+        col.add(
+            ids=[c.id for c in batch],
+            documents=[c.text for c in batch],
+            metadatas=[{
+                "code": c.code, "topic": c.topic, "category": c.category,
+                "section": c.section, "source": c.source,
+                "doc_version": c.doc_version, "dept": c.dept,
+            } for c in batch],
+            **({"embeddings": embed([c.text for c in batch])} if embed else {}),
+        )
+        print(f"  嵌入 {min(i + batch_size, len(new))}/{len(new)}")
+    return {"added": len(new), "removed": len(stale), "unchanged": len(wanted) - len(new)}
 
 
 # ── 主流程 ────────────────────────────────────────────────────────
 def build_chunks() -> tuple[list[Chunk], list[dict]]:
+    """所有科別（knowledge/*/manifest.json）的單張切段。同一份單張可被多個科別引用，各自帶科別標記。"""
     count_tokens = get_token_counter()
     chunks: list[Chunk] = []
     files_report: list[dict] = []
+    for dept in departments.load_all().values():
+        c, r = _build_dept_chunks(dept.id, dept.source_dir, count_tokens)
+        chunks += c
+        files_report += r
+    return chunks, files_report
 
-    md_files = sorted(VAULT_DIR.glob("*.md"))
+
+def _build_dept_chunks(dept_id: str, source_dir: Path, count_tokens) -> tuple[list[Chunk], list[dict]]:
+    chunks: list[Chunk] = []
+    files_report: list[dict] = []
+
+    md_files = sorted(source_dir.glob("*.md"))
     if not md_files:
-        sys.exit(f"找不到任何 .md：{VAULT_DIR}")
+        sys.exit(f"科別 {dept_id} 找不到任何 .md：{source_dir}")
 
     for path in md_files:
         raw = path.read_text(encoding="utf-8")
@@ -345,19 +315,23 @@ def build_chunks() -> tuple[list[Chunk], list[dict]]:
             for i, text in enumerate(chunk_section(sec_name, sec_body, fits)):
                 # 前置 topic 與章節名，讓嵌入向量帶有主題語境
                 embed_text = prefix + text
+                # ID 含版本：單張改版（即使文字未變）也會換新 ID，舊版由 sync_collection 刪除
                 cid = hashlib.md5(
-                    f"{code}|{sec_name}|{i}|{text}".encode("utf-8")
+                    f"{dept_id}|{code}|{doc_version}|{sec_name}|{i}|{text}".encode("utf-8")
                 ).hexdigest()
                 chunks.append(
                     Chunk(
                         id=cid, text=embed_text, code=code, topic=topic,
                         category=category, section=sec_name,
-                        source=source, doc_version=doc_version,
+                        source=source, doc_version=doc_version, dept=dept_id,
                     )
                 )
 
+        if len(chunks) == n_before:
+            print(f"  ⚠ {dept_id}／{path.name}：rag_index 為 true 卻沒有切出任何段落，請檢查章節格式（## 標題）")
         files_report.append({
             "file": path.name,
+            "dept": dept_id,
             "code": code,
             "topic": topic,
             "category": category,
@@ -443,46 +417,40 @@ def main() -> None:
 
     client = chromadb.PersistentClient(path=str(CHROMA_PATH))
 
-    if args.rebuild:
+    rebuild = args.rebuild
+    if not rebuild:
+        try:
+            built_with = (client.get_collection(COLLECTION_NAME).metadata or {}).get("embed_model", "舊版 MiniLM")
+            if built_with != EMBED_MODEL:
+                # 不同模型的向量不能混在同一個索引：整個重建
+                print(f"索引是用 {built_with} 建立的，目前檢索模型是 {EMBED_MODEL} → 整個重建")
+                rebuild = True
+        except Exception:
+            pass   # 還沒有集合：下面會建立
+    if rebuild:
         try:
             client.delete_collection(COLLECTION_NAME)
             print(f"已刪除舊集合 {COLLECTION_NAME}")
         except Exception:
             pass
 
+    # 段落與查詢向量都明確由 ef 計算（各自加前綴），集合本身不掛嵌入函式
     col = client.get_or_create_collection(
         name=COLLECTION_NAME,
-        embedding_function=ef,
-        metadata={"hnsw:space": "cosine"},
+        metadata={"hnsw:space": "cosine", "embed_model": EMBED_MODEL},
     )
 
-    existing = set(col.get(include=[])["ids"]) if col.count() else set()
-    new = [c for c in chunks if c.id not in existing]
-    print(f"既有 {len(existing)} 個 chunks，本次新增 {len(new)} 個")
-
-    if new:
-        B = 32
-        for i in range(0, len(new), B):
-            batch = new[i : i + B]
-            col.add(
-                ids=[c.id for c in batch],
-                documents=[c.text for c in batch],
-                metadatas=[{
-                    "code": c.code, "topic": c.topic, "category": c.category,
-                    "section": c.section, "source": c.source,
-                    "doc_version": c.doc_version,
-                } for c in batch],
-            )
-            print(f"  嵌入 {min(i+B, len(new))}/{len(new)}")
+    result = sync_collection(col, chunks, embed=ef.embed_documents)
+    print(f"新增 {result['added']}、刪除 {result['removed']}（舊版或已停用單張）、未變 {result['unchanged']} 個 chunks")
 
     print(f"\n集合 {COLLECTION_NAME} 現有 {col.count()} 個 chunks")
-    write_report(files_report, total, "rebuild" if args.rebuild else "incremental")
+    write_report(files_report, total, "rebuild" if rebuild else "sync")
     print(f"報告 → {REPORT_PATH}")
 
     # 煙霧測試：確認排除章節真的沒進去、且檢索得到正確文件
     print("\n── 煙霧測試 ──")
     for q in ["化療後嘴巴破了怎麼辦", "一直拉肚子", "白血球低要注意什麼"]:
-        r = col.query(query_texts=[q], n_results=2)
+        r = col.query(query_embeddings=ef.embed_query([q]), n_results=2)
         hits = [f"{m['code']}／{m['section']}" for m in r["metadatas"][0]]
         print(f"  「{q}」→ {', '.join(hits)}")
 

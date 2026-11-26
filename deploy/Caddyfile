@@ -1,0 +1,13 @@
+# HTTPS 反向代理：Caddy 會自動向 Let's Encrypt 申請並更新憑證（網域需已指向這台主機，80/443 對外開放）。
+# WebSocket（/ws/nurse）會自動轉送，不需另外設定。
+# 刻意不開存取紀錄（沒有 log 指令 Caddy 就不記）：網址中的 WebSocket 票券雖然 60 秒就失效，仍不留在紀錄裡。
+{$DOMAIN} {
+	encode gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	reverse_proxy app:8000
+}

@@ -55,9 +55,9 @@ def patient_user(user: dict = Depends(require_role("patient"))) -> dict:
     return user
 
 
-def staff_from_ws_token(token: str) -> dict | None:
-    """WebSocket 無法帶自訂 header，改由 query 參數 ?token= 驗證。限研究者/管理者。"""
-    payload = auth.verify_token(token or "")
+def staff_from_ws_ticket(ticket: str) -> dict | None:
+    """WebSocket 無法帶自訂 header，改由 ?ticket= 驗證短效票券（由 POST /ws/ticket 取得）。限研究者/管理者。"""
+    payload = auth.verify_ws_ticket(ticket or "")
     if not payload or payload["role"] not in ("researcher", "admin"):
         return None
     return payload

@@ -39,14 +39,37 @@ check('衛教 + 導語 3/10 + ONC-22', /3\/10/.test(r.reply) && r.sources[0].sta
 check('分數落庫 count=4', s1.scores[0].score === 3 && s1.scores[0].extra.count === 4);
 
 title('S3 症狀評估達門檻 → 升級');
-say(s1, '打完針之後一直想吐'); say(s1, '8'); r = say(s1, '吐了六次');
-check('升級 medium、通知護理師', r.emergency && r.level === 'medium' && /護理師/.test(r.reply));
+say(s1, '打完針之後一直想吐'); say(s1, '8'); r = say(s1, '吐了五次');
+check('升級 medium、提醒護理站（不宣稱已通知）', r.emergency && r.level === 'medium' && /護理站/.test(r.reply) && !/已通知/.test(r.reply));
+say(s1, '又一直想吐'); say(s1, '6'); r = say(s1, '今天吐了八次');
+check('≥6 次（CTCAE grade 3）→ HIGH、建議就醫', r.emergency && r.level === 'high' && /盡快就醫/.test(r.reply));
 check('SYMPTOM_ALERT 落庫', s1.alerts.some((a) => a.type === 'SYMPTOM_ALERT'));
 
 title('S4 HIGH 紅旗短路');
 r = say(s1, '我現在胸痛而且喘不過氣');
 check('HIGH、固定回覆、無來源', r.emergency && r.level === 'high' && /呼叫鈴/.test(r.reply) && r.sources.length === 0);
 check('EMERGENCY_ALERT 落庫', s1.alerts.some((a) => a.type === 'EMERGENCY_ALERT'));
+
+r = say(s1, '我發燒38.5度');
+check('發燒 → HIGH、不可自行吃退燒藥', r.emergency && r.level === 'high' && /退燒藥/.test(r.reply));
+r = say(s1, '我想一了百了');
+check('自傷 → 1925 安心專線', r.emergency && /1925/.test(r.reply));
+
+title('紅旗規則與後端一致（backend/redflag_cases.json）');
+const cases = JSON.parse(require('fs').readFileSync(path.join(__dirname, '..', 'backend', 'redflag_cases.json'), 'utf8')).cases;
+const diff = cases.filter((c) => {
+  const f = E.screenRedFlag(c.text, data);
+  return f.severity !== c.expect || (c.category && f.category !== c.category);
+});
+diff.forEach((c) => console.log('    ✗ ' + c.text + ' → ' + JSON.stringify(E.screenRedFlag(c.text, data))));
+check(cases.length + ' 題全部與後端預期一致', diff.length === 0);
+
+title('資訊型提問不進症狀評估');
+const s4 = E.createSession(P('P001'));
+r = say(s4, '化療前要怎麼預防想吐');
+check('預防提問 → 直接衛教、不問幾分', !/幾分/.test(r.reply) && r.sources.length > 0);
+r = say(s4, '我一直拉肚子要怎麼避免脫水');
+check('有當下線索 → 仍進評估', /幾分/.test(r.reply));
 
 title('S5 否定語境');
 r = say(s1, '醫師說如果胸痛要回診，我現在沒有胸痛，平常要注意什麼');
@@ -59,7 +82,7 @@ check('HIGH（撐不下去）', r.emergency && r.keywords.includes('撐不下去
 title('S7 知識庫外 → 轉介');
 ['請問醫院的停車場在哪裡', '健保卡遺失怎麼補辦', '化療完可以打疫苗嗎', '我可以養狗嗎'].forEach((q) => {
   r = say(s1, q);
-  check('轉介：' + q, r.quality === 'deflected_no_source' && r.sources.length === 0);
+  check('轉介：' + q, r.quality === 'deflected_no_source' && r.sources.length === 0 && !/會盡快回覆/.test(r.reply));
 });
 
 title('落髮永不升級');

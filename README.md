@@ -23,6 +23,12 @@
 另含：回答品質閘（無來源不編造）、LLM 供應商抽象（Gemma → Sonnet 5 換一個環境變數）、
 紅旗改用「關鍵字為底 + 否定處理 + 向量補充」。
 
+**2026-11 同儕審查後修正（紅旗 v2 與警示確認）**：紅旗補上發燒（含體溫 ≥38°C 判讀）、出血、脫水、過敏、
+台語說法，否定改為子句內緊貼判斷；病患端不再宣稱「已通知」，LINE 聲明非 24 小時監看；
+警示據實記錄是否送達，護理端有「未確認警示」清單與確認（`GET /alerts`、`POST /alerts/{id}/ack`）。
+值班流程草案見 [`docs/ops/警示處理SOP_草案.md`](docs/ops/警示處理SOP_草案.md)。
+⚠️ 紅旗詞庫尚未經臨床人員審核與獨立測試集驗證，仍不可讓真實病患使用。
+
 完整設計見 [`docs/specs/2026-07-16-phase1-foundation-design.md`](docs/specs/2026-07-16-phase1-foundation-design.md)。
 
 ## 架構
@@ -43,7 +49,7 @@
 | `backend/auth.py` | 帳密雜湊 + 角色（patient/researcher/admin） |
 | `backend/redflag.py` | 紅旗偵測：關鍵字 + 否定 + 向量補充 |
 | `backend/quality.py` | 回答品質閘 |
-| `backend/llm_client.py` | LLM 供應商抽象（google / anthropic） |
+| `backend/llm_client.py` | LLM 供應商抽象（anthropic：Sonnet 5.5 / Opus 5.5；google；mock） |
 | `backend/rag.py` | 向量檢索 |
 | `backend/embedding.py` | 共用嵌入層，torch → ONNX 自動 fallback |
 | `scripts/index_vault.py` | 從 Markdown 知識庫建立向量索引 |
@@ -58,7 +64,8 @@ cd backend && pip install -r requirements.txt && cd ..
 # 2. 設定 .env（專案根目錄；.env 不進版控）
 cp .env.example .env
 #    預設 LLM_PROVIDER=mock（演示模式，不需 API key）
-#    要用真實模型：LLM_PROVIDER=google + GOOGLE_API_KEY=<Google AI Studio 金鑰>
+#    正式收案：LLM_PROVIDER=anthropic + PRIMARY_MODEL=claude-sonnet-5-5（或 claude-opus-5-5）+ ANTHROPIC_API_KEY
+#    （Google AI Studio 免費方案的條款允許用輸入資料改善產品，只能用於開發，不可用於真實病患）
 #    正式環境務必設定：AUTH_SECRET（固定後重啟不會把大家登出）、
 #                      ADMIN_PASSWORD（尚無管理者時，啟動會建立帳號 admin）
 
@@ -73,6 +80,16 @@ cd backend && python -X utf8 -m uvicorn main:app --port 8000
 
 # 6. 瀏覽器開 http://localhost:8000
 ```
+
+### 多科別
+
+知識庫依科別分開：`knowledge/<科別>/manifest.json` 指定單張來源、緊急電話、紅旗擴充規則與症狀評估協定，
+病患綁定科別後，檢索、紅旗與評估都依科別進行。新增科別不需改程式，見 [`docs/knowledge/新增科別說明.md`](docs/knowledge/新增科別說明.md)。
+
+### 正式部署（Docker）
+
+`docker compose --profile https up -d --build`：FastAPI＋Caddy（自動 HTTPS），資料、索引與模型放在 volume，
+映像不含病患資料或密鑰。步驟、`.env` 設定、備份與上線前檢查清單見 [`docs/deploy/部署說明.md`](docs/deploy/部署說明.md)。
 
 ### 演示（不需 API key）
 
@@ -103,6 +120,11 @@ cd backend && python -X utf8 -m uvicorn main:app --port 8000
 ```bash
 cd backend
 python -X utf8 test_security.py      # 資安回歸測試（對應資安審查各項）+ 前後端欄位契約
+python -X utf8 test_redflag.py       # 紅旗 v2 回歸測試集（redflag_cases.json，與演示引擎共用）
+python -X utf8 test_alerts.py        # 警示送達紀錄、未確認清單與確認、病患端安全文字
+python -X utf8 test_llm_claude.py    # Claude Sonnet 5.5 / Opus 5.5 串接（不呼叫 API）
+python -X utf8 test_kb_update.py     # 知識庫同步（改版／停用單張）、引用核對、單張版本紀錄
+python -X utf8 test_departments.py   # 多科別：設定檔、紅旗核心＋擴充、評估協定、依科別檢索
 python -X utf8 test_phase1.py        # 地基單元測試（db/auth/redflag/quality）
 python -X utf8 test_phase2.py        # 症狀追問
 python -X utf8 test_phase3.py        # 研究統計與匯出

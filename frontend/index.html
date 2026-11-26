@@ -253,6 +253,16 @@
     transition: background 0.15s;
   }
   .chip:hover { background: var(--secondary-container); }
+  /* 症狀評估的可點選回覆：按鈕放大，方便長輩點選（不必自己打數字） */
+  .answer-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 10px 44px; }
+  .answer-chip {
+    min-width: 44px; min-height: 44px; padding: 8px 14px;
+    border-radius: 12px; border: 1px solid var(--primary);
+    background: var(--surface-lowest); color: var(--primary);
+    font-size: 17px; font-weight: 600; cursor: pointer;
+  }
+  .answer-chip.stop { border-color: var(--outline); color: var(--outline); font-size: 14px; font-weight: 400; }
+  .answer-chip:hover { background: var(--secondary-container); }
   .input-row {
     display: flex; align-items: center; gap: 10px;
     padding: 8px 12px 16px;
@@ -519,6 +529,21 @@
   .flag-kw { font-size: 12px; color: var(--on-surface); margin-bottom: 2px; }
   .flag-time { font-size: 10px; color: var(--outline); }
   .empty-flag { font-size: 13px; color: var(--outline); text-align: center; padding: 12px 0; }
+  .sev-info { background: var(--outline); color: white; }
+  .ack-item { background: var(--surface-low); border-radius: 10px; padding: 9px 11px; margin-bottom: 8px;
+              border-left: 3px solid var(--outline); }
+  .ack-item.high { border-left-color: var(--red-flag); }
+  .ack-item.medium { border-left-color: var(--amber); }
+  .ack-item.overdue { box-shadow: 0 0 0 2px var(--red-flag) inset; }
+  .ack-msg { font-size: 12px; color: var(--on-surface); margin: 3px 0; word-break: break-all; }
+  .ack-meta { font-size: 11px; color: var(--outline); display: flex; justify-content: space-between;
+              align-items: center; gap: 6px; flex-wrap: wrap; }
+  .ack-btn { border: none; border-radius: var(--radius-full); padding: 3px 10px; font-size: 12px;
+             background: var(--red-flag); color: white; cursor: pointer; }
+  .ack-item.medium .ack-btn, .ack-item.info .ack-btn { background: var(--amber); }
+  .overdue-tag { color: var(--red-flag); font-weight: 700; }
+  .ws-state { font-size: 11px; margin-left: 6px; }
+  .ws-state.off { color: var(--red-flag); font-weight: 700; }
   .action-btns { display: flex; flex-direction: column; gap: 8px; }
   .action-btn {
     background: var(--surface-low);
@@ -592,7 +617,7 @@
 
   <div class="emergency-banner" id="emergency-banner">
     <span>⚠️</span>
-    <span id="emergency-text">偵測到緊急關鍵字，護理師已收到通知。</span>
+    <span id="emergency-text">偵測到需要注意的狀況，請按呼叫鈴讓護理師知道。</span>
   </div>
 
   <div class="typing-indicator" id="typing" style="padding: 0 16px 8px; gap:6px;">
@@ -685,6 +710,12 @@
     </div>
 
     <div class="r-section">
+      <div class="r-section-title">未確認警示 <span id="ack-count"></span>
+        <span class="ws-state off" id="ws-state">● 即時連線中斷</span></div>
+      <div id="ack-queue"><div class="empty-flag">載入中…</div></div>
+    </div>
+
+    <div class="r-section">
       <div class="r-section-title">紅旗紀錄</div>
       <div id="r-flag-records">
         <div class="empty-flag">目前無警示紀錄</div>
@@ -730,6 +761,7 @@
           <summary>＋ 新增病患</summary>
           <div class="admin-grid">
             <input id="np-code" placeholder="代號 P012" maxlength="7">
+            <select id="np-dept" title="科別：決定知識庫範圍、紅旗設定與緊急電話"><option value="">科別（預設）</option></select>
             <input id="np-cancer" placeholder="癌別">
             <input id="np-age" type="number" min="0" max="120" placeholder="年齡">
             <select id="np-gender"><option value="">性別</option><option>男</option><option>女</option><option>其他</option></select>
@@ -941,6 +973,8 @@ async function login() {
       showScreen('researcher-screen');
       loadSessions();
       connectNurseWS();
+      loadAlertQueue();
+      if (!window._alertTimer) window._alertTimer = setInterval(loadAlertQueue, 60000);
       if (data.role === 'admin' && typeof loadAdminPatients === 'function') loadAdminPatients();
     }
   } catch {
@@ -975,6 +1009,7 @@ async function sendMessage() {
   input.value = '';
   input.style.height = 'auto';
 
+  removeAnswerChips();
   appendMessage('user', text);
   showTyping(true);
 
@@ -990,17 +1025,42 @@ async function sendMessage() {
     const data = await res.json();
     showTyping(false);
     appendMessage('ai', data.response, data.sources);
+    if (data.quick_replies && data.quick_replies.length) appendAnswerChips(data.quick_replies);
 
     if (data.is_emergency) {
       const banner = document.getElementById('emergency-banner');
+      // 不宣稱「護理師已收到通知」：系統只能保證送出提醒，無法保證有人當下看到（2026-11 同儕審查）
       document.getElementById('emergency-text').textContent =
-        `偵測到緊急關鍵字：${data.emergency_keywords.join('、')}。護理師已收到通知，請按呼叫鈴。`;
+        `偵測到需要注意的狀況：${data.emergency_keywords.join('、')}。系統已提醒護理站，請按呼叫鈴讓護理師知道。`;
       banner.classList.add('show');
     }
   } catch (e) {
     showTyping(false);
     appendMessage('ai', '⚠️ 連線失敗，請稍後再試或通知護理師。');
   }
+}
+
+// 症狀評估的可點選回覆（0–10 分、次數）。點一下就送出，送出後按鈕移除，避免重複點選。
+function appendAnswerChips(choices) {
+  removeAnswerChips();
+  const area = document.getElementById('chat-area');
+  const row = document.createElement('div');
+  row.className = 'answer-chips';
+  row.id = 'answer-chips';
+  choices.forEach((c) => {
+    const b = document.createElement('button');
+    b.className = 'answer-chip' + (c === '先不用了' ? ' stop' : '');
+    b.textContent = c;
+    b.onclick = () => { removeAnswerChips(); quickSend(c); };
+    row.appendChild(b);
+  });
+  area.appendChild(row);
+  area.scrollTop = area.scrollHeight;
+}
+
+function removeAnswerChips() {
+  const old = document.getElementById('answer-chips');
+  if (old) old.remove();
 }
 
 function quickSend(text) {
@@ -1219,15 +1279,30 @@ async function showStaffAudit() {
 }
 
 // ── 管理者：病患與 LINE 通行碼 ──
+let DEPT_NAMES = {};
+
+// 科別清單（knowledge/*/manifest.json）：建立病患時選擇，病患清單顯示科別名稱
+async function loadDepartments() {
+  try {
+    const list = await (await apiFetch('/departments')).json();
+    DEPT_NAMES = Object.fromEntries(list.map(d => [d.id, d.name]));
+    const sel = document.getElementById('np-dept');
+    sel.innerHTML = list.map(d =>
+      `<option value="${escHtml(d.id)}"${d.default ? ' selected' : ''}>${escHtml(d.name)}</option>`).join('');
+  } catch { /* 保留「科別（預設）」 */ }
+}
+
 async function loadAdminPatients() {
   const box = document.getElementById('admin-patients');
+  if (!Object.keys(DEPT_NAMES).length) await loadDepartments();
   try {
     const list = await (await apiFetch('/admin/patients')).json();
     if (!list.length) { box.textContent = '尚無病患，請先新增'; return; }
     box.innerHTML = list.map(p => {
       const status = p.bound_at ? '🟢 已綁定 LINE'
                    : p.pending_code_expires_at ? '🟡 已發碼，待病患輸入' : '⚪ 未綁定';
-      const meta = [p.cancer_type, p.age && `${p.age} 歲`, p.gender].filter(Boolean).join('・');
+      const meta = [DEPT_NAMES[p.department] || p.department, p.cancer_type, p.age && `${p.age} 歲`, p.gender]
+                   .filter(Boolean).join('・');
       return `<div class="adm-row">
           <div><b>${escHtml(p.pseudonym)}</b> <span class="adm-meta">${escHtml(meta)}</span>
                <div class="adm-meta">${status}</div></div>
@@ -1266,6 +1341,7 @@ async function createPatient() {
   const val = id => document.getElementById(id).value.trim();
   const body = {
     pseudonym: val('np-code').toUpperCase(),
+    department: val('np-dept') || null,
     cancer_type: val('np-cancer') || null,
     age: val('np-age') ? Number(val('np-age')) : null,
     gender: val('np-gender') || null,
@@ -1317,22 +1393,98 @@ function notifyNurse() {
 }
 
 // ── WebSocket (Nurse Alert) ──
-function connectNurseWS() {
+// 注意：WebSocket 只送給「當下開著這個頁面」的人。沒有人在線時，警示只會進資料庫，
+// 不會有任何人收到 —— 所以必須搭配下方「未確認警示」清單與值班 SOP（docs/ops/警示處理SOP_草案.md）。
+function setWsState(on) {
+  const el = document.getElementById('ws-state');
+  if (!el) return;
+  el.className = 'ws-state' + (on ? '' : ' off');
+  el.textContent = on ? '● 即時連線中' : '● 即時連線中斷';
+}
+
+function beep() {
   try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.35].forEach((t) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = 880; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.2, ctx.currentTime + t);
+      o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.2);
+    });
+  } catch { /* 瀏覽器不允許自動播放時略過 */ }
+}
+
+async function connectNurseWS() {
+  if (!authToken) return;
+  try {
+    // 先用登入 token（放在 header）換一張 60 秒有效的票券；網址裡只放票券，不放登入 token
+    const t = await fetch(`${API}/ws/ticket`, { method: 'POST', headers: { 'X-Auth-Token': authToken } });
+    if (!t.ok) { setWsState(false); if (authToken) setTimeout(connectNurseWS, 5000); return; }
+    const { ticket } = await t.json();
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    wsNurse = new WebSocket(`${proto}://${location.host}/ws/nurse?token=${encodeURIComponent(authToken)}`);
+    wsNurse = new WebSocket(`${proto}://${location.host}/ws/nurse?ticket=${encodeURIComponent(ticket)}`);
+    wsNurse.onopen = () => setWsState(true);
+    wsNurse.onclose = () => {
+      setWsState(false);
+      if (authToken) setTimeout(connectNurseWS, 5000);   // 自動重連
+    };
     wsNurse.onmessage = (e) => {
       const data = JSON.parse(e.data);
-      if (data.type === 'EMERGENCY_ALERT' || data.type === 'SYMPTOM_ALERT') {
-        const banner = document.getElementById('r-alert-banner');
-        const via = data.channel === 'line' ? '（LINE・居家）' : '';
-        document.getElementById('r-alert-text').textContent =
-          `即時警報${via}｜${data.patient_id}：${(data.keywords || []).join('、')}`;
-        banner.classList.add('show');
-        loadSessions(); // 重新整理列表
+      if (data.type === 'EMERGENCY_ALERT' || data.type === 'SYMPTOM_ALERT' || data.type === 'MEDIUM_FLAG') {
+        if (data.severity === 'high') {
+          const banner = document.getElementById('r-alert-banner');
+          const via = data.channel === 'line' ? '（LINE・居家）' : '';
+          document.getElementById('r-alert-text').textContent =
+            `即時警報${via}｜${data.patient_id}：${(data.keywords || []).join('、')}`;
+          banner.classList.add('show');
+          beep();
+        }
+        loadSessions();   // 重新整理列表
+        loadAlertQueue();
       }
     };
-  } catch { /* WS not available */ }
+  } catch { setWsState(false); }
+}
+
+// ── 未確認警示清單（GET /alerts、POST /alerts/{id}/ack）──
+const LEVEL_LABEL = { high: '緊急', medium: '注意', info: '待處理提問' };
+
+async function loadAlertQueue() {
+  const box = document.getElementById('ack-queue');
+  if (!box || !authToken) return;
+  try {
+    const res = await fetch(`${API}/alerts?status=open`, { headers: { 'X-Auth-Token': authToken } });
+    if (!res.ok) { box.innerHTML = '<div class="empty-flag">無法載入</div>'; return; }
+    const data = await res.json();
+    const items = data.items || [];
+    const overdue = items.filter((a) => a.overdue).length;
+    document.getElementById('ack-count').textContent =
+      items.length ? `（${items.length}${overdue ? `，逾時 ${overdue}` : ''}）` : '';
+    if (!items.length) { box.innerHTML = '<div class="empty-flag">目前沒有未確認的警示</div>'; return; }
+    box.innerHTML = items.map((a) => `
+      <div class="ack-item ${escHtml(a.level)}${a.overdue ? ' overdue' : ''}">
+        <div class="flag-record-top">
+          <span class="flag-pid">${escHtml(a.patient_code)}</span>
+          <span class="flag-sev sev-${escHtml(a.level)}">${LEVEL_LABEL[a.level] || escHtml(a.level)}</span>
+        </div>
+        <div class="flag-kw">${escHtml(a.trigger || '')}</div>
+        ${a.message ? `<div class="ack-msg">「${escHtml(a.message.slice(0, 80))}」</div>` : ''}
+        <div class="ack-meta">
+          <span>${fmtTime(a.ts)}・${a.age_min} 分鐘前${a.overdue ? ` <span class="overdue-tag">逾時（時限 ${a.sla_min} 分）</span>` : ''}
+            ${a.notified_channels.length ? '' : '・<span class="overdue-tag">當時無人在線</span>'}</span>
+          <button class="ack-btn" onclick="ackAlert(${Number(a.id)})">已處理</button>
+        </div>
+      </div>`).join('');
+  } catch { box.innerHTML = '<div class="empty-flag">無法連線伺服器</div>'; }
+}
+
+async function ackAlert(id) {
+  try {
+    const res = await fetch(`${API}/alerts/${id}/ack`, { method: 'POST', headers: { 'X-Auth-Token': authToken } });
+    if (res.status === 409) alert('這筆警示已由其他人確認。');
+    else if (!res.ok) alert('確認失敗，請稍後再試。');
+  } catch { alert('無法連線伺服器'); }
+  loadAlertQueue();
 }
 
 // ── Utils ──

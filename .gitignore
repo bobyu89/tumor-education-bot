@@ -20,7 +20,7 @@ npm-debug.log*
 chroma_db/
 chroma_db_backup_*/
 
-# 嵌入模型權重（470MB ONNX，超過 GitHub 100MB 上限，需另行下載）
+# 嵌入模型權重（每個約 470MB ONNX，超過 GitHub 100MB 上限，首次執行自動下載）
 models/
 
 # SQLite 資料庫（含病患資料，絕不進版控）
@@ -47,3 +47,9 @@ config_local.py
 # Zip
 *.zip
 skills_extracted/
+
+# 檢索評估的逐題輸出（scripts/eval_retrieval.py 產生；摘要記錄在 docs/knowledge/檢索評估.md）
+backend/retrieval_eval_results.json
+
+# Claude 實測的逐題輸出（scripts/live_llm_eval.py）
+eval_results/

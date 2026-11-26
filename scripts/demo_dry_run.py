@@ -100,18 +100,18 @@ with TestClient(main.app) as client:
     check("未達門檻 → 帶嚴重度導語的衛教", "3/10" in r["response"] and len(r["sources"]) > 0)
     check("分數已落庫", db.get_symptom_scores("P001", "diarrhea")[-1]["score"] == 3)
 
-    title("S3 症狀評估達門檻 → 升級：噁心嘔吐 8 分、六次")
+    title("S3 症狀評估達門檻 → 升級：噁心嘔吐 8 分、五次")
     r = say(client, "P001", "打完針之後一直想吐")
     r = say(client, "P001", "8")
-    r = say(client, "P001", "吐了六次")
-    check("升級為 emergency、通知護理師", r["is_emergency"] is True and "護理師" in r["response"])
+    r = say(client, "P001", "吐了五次")
+    check("升級為 emergency、提醒護理站", r["is_emergency"] is True and "護理站" in r["response"])
     check("alert 落庫（medium）",
           any(a["level"] == "medium" and "噁心嘔吐" in a["trigger"]
               for s in client.get("/sessions", headers=R).json() if s["patient_code"] == "P001"
               for a in s["red_flags"]))
 
     title("S4 HIGH 紅旗瞬間短路 + 護理師 WebSocket 推播")
-    with client.websocket_connect(f"/ws/nurse?token={R['X-Auth-Token']}") as ws:
+    with client.websocket_connect(f"/ws/nurse?ticket={client.post('/ws/ticket', headers=R).json()['ticket']}") as ws:
         r = say(client, "P001", "我現在胸痛而且喘不過氣")
         check("emergency、固定安全回覆、不進 RAG", r["is_emergency"] and "呼叫鈴" in r["response"] and r["sources"] == [])
         check("命中關鍵字 胸痛/喘不過氣", set(r["emergency_keywords"]) >= {"胸痛", "喘不過氣"})

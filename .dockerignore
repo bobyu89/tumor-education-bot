@@ -1,0 +1,23 @@
+# 不進映像：病患資料、密鑰、模型權重、向量庫、文件與開發檔
+.env
+*.env
+data/
+*.sqlite3
+*.db
+chroma_db/
+chroma_db_backup_*/
+models/
+.git/
+.claude/
+node_modules/
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+docs/
+*.pdf
+*.docx
+*.zip
+make_doc*.js
+package*.json
+index_report.json

@@ -1,0 +1,42 @@
+# 腫瘤衛教機器人：部署設定。說明見 docs/deploy/部署說明.md
+#
+#   只開 API（本機或內網測試）：     docker compose up -d --build
+#   加上 HTTPS（LINE webhook 需要）：docker compose --profile https up -d --build
+#
+# 設定一律放在 .env（不進版控）；範本見 .env.example。
+services:
+  app:
+    build: .
+    image: tumor-education-bot:latest
+    env_file: .env
+    environment:
+      # 容器內固定路徑（.env 裡的 CHROMA_DB_PATH 等本機路徑不適用於容器）
+      CHROMA_DB_PATH: /app/chroma_db
+      FORWARDED_ALLOW_IPS: "*"          # 只接受來自同一個 compose 網路的反向代理
+    volumes:
+      - app_data:/app/data              # SQLite（含病患資料）— 備份見部署說明
+      - chroma_db:/app/chroma_db
+      - models:/app/models
+    ports:
+      - "127.0.0.1:8000:8000"           # 只綁本機；對外一律經由 HTTPS 反向代理
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    profiles: ["https"]
+    depends_on: [app]
+    environment:
+      DOMAIN: ${DOMAIN:?請在 .env 設定 DOMAIN（例如 bot.example.org）}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data                # 自動申請的 TLS 憑證
+    restart: unless-stopped
+
+volumes:
+  app_data:
+  chroma_db:
+  models:
+  caddy_data:

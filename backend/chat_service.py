@@ -11,6 +11,12 @@ channel 決定給病患的求助指引：
   web  —— 住院病患在病房用網頁，可以按呼叫鈴
   line —— 化療後居家病患，沒有呼叫鈴；指引改為撥打電話，且不承諾「護理師會回覆」，
           因為系統無法保證當下有人在看警示
+
+警示紀錄（alerts 表）據實記錄（2026-11 同儕審查 M2）：
+  - notified_channels 只在 WebSocket「實際送達 ≥1 個在線護理端」時才寫 ["websocket"]，否則為 []；
+  - high / medium 都推播並落庫，護理端以 GET /alerts 看未確認清單、POST /alerts/{id}/ack 確認；
+  - 知識庫外提問記為 level="info"（待處理問題），讓問題進入護理端清單，而不是石沉大海；
+  - 病患端文字不宣稱「已通知」，見 safety_text.py。
 """
 from __future__ import annotations
 
@@ -21,6 +27,7 @@ from datetime import datetime, timezone
 
 import assessment
 import db
+import departments
 import quality
 from config import settings
 from llm_client import LLMError, get_client
@@ -28,134 +35,164 @@ from models import ChatResponse, PatientProfile
 from prompt import build_prompt
 from rag import retriever
 from redflag import screen as redflag_screen
+from safety_text import deflect_reply, emergency_reply, escalation_reply, help_text
 from websocket_manager import manager
 
 Channel = str   # "web" | "line"
 
 
-def _help_text(channel: Channel) -> str:
-    if channel == "line":
-        return f"{settings.EMERGENCY_CONTACT}。"
-    return "請按旁邊的呼叫鈴通知護理師。"
+def _contact(dept: str | None = None) -> str:
+    """科別的緊急聯絡指引；科別設定未填時沿用 .env 的 EMERGENCY_CONTACT。"""
+    return departments.get(dept).emergency_contact or settings.EMERGENCY_CONTACT
 
 
-def _emergency_reply(channel: Channel) -> str:
-    if channel == "line":
-        return ("這個狀況需要立即處理，請不要等待訊息回覆。"
-                f"{settings.EMERGENCY_CONTACT}。系統已記錄並通知醫療團隊。")
-    return ("這個狀況需要馬上讓護理師或醫師知道，請按旁邊的呼叫鈴，"
-            "系統已同時發出警示。若情況緊急請直接撥打護理站電話或119。")
+def _help_text(channel: Channel, dept: str | None = None) -> str:
+    return help_text(channel, _contact(dept))
 
 
-def _escalation_reply(channel: Channel, symptom_name: str, score) -> str | None:
-    if channel == "line":
-        return (f"您的「{symptom_name}」聽起來比較嚴重（嚴重度 {score}/10）。"
-                "系統已記錄並通知醫療團隊，但請不要等待回覆，"
-                f"{settings.EMERGENCY_CONTACT}。")
-    return None   # 網頁沿用 assessment 原本的回覆
+def _emergency_reply(channel: Channel, category: str = "other", dept: str | None = None) -> str:
+    return emergency_reply(channel, category, _contact(dept), departments.get(dept).safety_text)
+
+
+def _dept_of(pid: str) -> str:
+    """病患所屬科別；未設定或科別已不存在時用預設科別（並留紀錄，避免靜默套錯規則）。"""
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT department FROM patients WHERE pseudonym=?", (pid,)).fetchone()
+    dept = row["department"] if row else None
+    if dept and departments.exists(dept):
+        return dept
+    if dept:
+        logging.warning("[dept] 病患 %s 的科別 %s 不存在，改用預設科別 %s", pid, dept, settings.DEFAULT_DEPARTMENT)
+    return settings.DEFAULT_DEPARTMENT
+
+
+async def _notify(payload: dict, pid: str, trigger: str, level: str, msg_id: int | None) -> int:
+    """推播給在線護理端並落庫；notified_channels 依「實際送達」據實記錄。回傳 alert id。"""
+    delivered = await manager.broadcast_alert(payload)
+    channels = ["websocket"] if delivered else []
+    alert_id = db.add_alert(pid, trigger, level, msg_id, notified_channels=channels)
+    if not delivered and level == "high":
+        # 沒有任何護理端在線：留下可稽核的紀錄（供每日檢視「無人即時看到的 HIGH」）
+        db.log_event("alert_undelivered", pid, {"alert_id": alert_id, "level": level, "trigger": trigger})
+    return alert_id
 
 
 async def process_message(pid: str, text: str, channel: Channel = "web") -> ChatResponse:
     db.ensure_session(pid)
+    dept = _dept_of(pid)      # 決定紅旗設定、症狀評估、知識庫範圍與緊急電話
 
-    # ① 紅旗瞬間篩檢
-    flag = redflag_screen(text)
+    # ① 紅旗瞬間篩檢（向量補充層會跑嵌入模型，丟到 thread 執行，不阻塞事件迴圈）
+    flag = await asyncio.to_thread(redflag_screen, text, True, dept)
     msg_id = db.add_message(pid, "patient", text,
                             redflag_level=flag.severity,
                             redflag_terms=flag.matched_keywords)
 
     if flag.severity == "high":
-        await manager.broadcast_alert({
+        await _notify({
             "type": "EMERGENCY_ALERT", "severity": "high",
             "patient_id": pid,                       # 只送假名代號，不送真名（資安審查 S2/S5）
             "channel": channel,
             "message": text,
             "keywords": flag.matched_keywords,
+            "category": flag.category,
             "via": flag.via,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-        db.add_alert(pid, "；".join(flag.matched_keywords) or f"vector:{flag.via}",
-                     "high", msg_id, notified_channels=["websocket"])
+        }, pid, "；".join(flag.matched_keywords) or f"vector:{flag.via}", "high", msg_id)
         db.log_event("redflag_high", pid,
-                     {"terms": flag.matched_keywords, "via": flag.via, "channel": channel})
-        reply = _emergency_reply(channel)
+                     {"terms": flag.matched_keywords, "via": flag.via, "channel": channel,
+                      "category": flag.category})
+        reply = _emergency_reply(channel, flag.category, dept)
         db.add_message(pid, "bot", reply, answer_quality="redflag_shortcut")
         return _response(pid, reply, is_emergency=True, keywords=flag.matched_keywords)
+
+    # MEDIUM：推播（非緊急）＋進入未確認清單，不論之後走評估或衛教路徑都只記一次
+    await _record_medium_alert(pid, flag, msg_id, channel, text)
 
     # ② 症狀結構化追問
     state = db.get_assessment_state(pid)
     if state:
-        ar = assessment.advance(pid, state, text)
+        ar = assessment.advance(pid, state, text, dept)
         if not ar.done:
             return _assess_reply(pid, ar, flag)
         if ar.escalate:
-            return await _escalate(pid, ar, msg_id, channel)
+            return await _escalate(pid, ar, msg_id, channel, dept)
         if ar.educate:
-            lead = (f"了解了，您的「{_sym_name(ar.symptom)}」嚴重度是 {ar.score}/10。"
+            lead = (f"了解了，您的「{_sym_name(ar.symptom, dept)}」嚴重度是 {ar.score}/10。"
                     "以下提供一些照護建議：\n\n")
-            return await _rag_answer(pid, _edu_query(ar), flag, msg_id, channel, lead=lead,
-                                     code=ar.onc_code)
+            return await _rag_answer(pid, _edu_query(ar, dept), flag, msg_id, channel, lead=lead,
+                                     code=ar.doc_code, dept=dept)
         return _assess_reply(pid, ar, flag)          # 病患中止評估
-    proto = assessment.detect_symptom(text)
+    proto = assessment.detect_symptom(text, dept)
     if proto is not None:
         return _assess_reply(pid, assessment.start(pid, proto), flag)
 
     # ③ 一般 RAG 問答
-    return await _rag_answer(pid, text, flag, msg_id, channel)
+    return await _rag_answer(pid, text, flag, msg_id, channel, dept=dept)
 
 
-def _response(pid: str, reply: str, *, sources=None, is_emergency=False, keywords=None) -> ChatResponse:
+def _response(pid: str, reply: str, *, sources=None, is_emergency=False, keywords=None,
+              quick_replies=None) -> ChatResponse:
     return ChatResponse(response=reply, sources=sources or [], is_emergency=is_emergency,
                         emergency_keywords=keywords or [], session_id=pid,
-                        timestamp=datetime.now())
+                        timestamp=datetime.now(), quick_replies=quick_replies or [])
 
 
 def _assess_reply(pid: str, ar, flag) -> ChatResponse:
     db.add_message(pid, "bot", ar.reply, answer_quality="assessment")
-    return _response(pid, ar.reply, keywords=flag.matched_keywords)
+    return _response(pid, ar.reply, keywords=flag.matched_keywords, quick_replies=ar.choices)
 
 
-async def _escalate(pid: str, ar, msg_id: int, channel: Channel) -> ChatResponse:
-    await manager.broadcast_alert({
+async def _escalate(pid: str, ar, msg_id: int, channel: Channel, dept: str | None = None) -> ChatResponse:
+    name = _sym_name(ar.symptom, dept)
+    await _notify({
         "type": "SYMPTOM_ALERT", "severity": ar.escalate_level,
         "patient_id": pid, "channel": channel,
-        "message": f"{_sym_name(ar.symptom)} 嚴重度 {ar.score}/10",
+        "message": f"{name} 嚴重度 {ar.score}/10",
         "keywords": [ar.symptom], "via": "assessment",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
-    db.add_alert(pid, f"{_sym_name(ar.symptom)} {ar.score}/10", ar.escalate_level, msg_id,
-                 notified_channels=["websocket"])
-    reply = _escalation_reply(channel, _sym_name(ar.symptom), ar.score) or ar.reply
+    }, pid, f"{name} {ar.score}/10", ar.escalate_level, msg_id)
+    if channel == "line":
+        proto = assessment.get_protocol(ar.symptom, dept)
+        field = assessment._fmt_field(proto, ar.extra) if proto else ""
+        reply = escalation_reply("line", name, ar.score, f"，{field}" if field else "",
+                                 ar.escalate_level, _contact(dept))
+    else:
+        reply = ar.reply
     db.add_message(pid, "bot", reply, answer_quality="assessment_escalated")
     return _response(pid, reply, is_emergency=True, keywords=[ar.symptom])
 
 
-def _sym_name(key: str) -> str:
-    p = assessment._BY_KEY.get(key)
+def _sym_name(key: str, dept: str | None = None) -> str:
+    p = assessment.get_protocol(key, dept)
     return p.name if p else key
 
 
-def _edu_query(ar) -> str:
-    """評估後衛教用的 RAG 查詢：用症狀名，命中對應 ONC 主題。"""
-    return f"{_sym_name(ar.symptom)}的自我照顧與注意事項"
+def _edu_query(ar, dept: str | None = None) -> str:
+    """評估後衛教用的 RAG 查詢：用症狀名，命中對應的單張。"""
+    return f"{_sym_name(ar.symptom, dept)}的自我照顧與注意事項"
 
 
 async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Channel,
-                      *, lead: str = "", code: str | None = None) -> ChatResponse:
+                      *, lead: str = "", code: str | None = None, dept: str | None = None) -> ChatResponse:
     """RAG → 品質前置 → LLM → 品質標記 → 落庫。一般問答與評估後衛教共用。
-    code：限制檢索在單一衛教單張（評估後衛教用，症狀→單張對應是確定的，不該靠語意猜）。"""
+    code：限制檢索在單一衛教單張（評估後衛教用，症狀→單張對應是確定的，不該靠語意猜）。
+    dept：只檢索病患所屬科別的單張。"""
     profile = load_profile(pid)
-    rag_docs = retriever.query(query_text, code_filter=code)
+    rag_docs = await asyncio.to_thread(retriever.query, query_text, code_filter=code, dept=dept)
     sources = [d["source"] for d in rag_docs]
 
     if not quality.pre_check(rag_docs):
-        reply = quality.DEFLECT_TEXT
+        reply = deflect_reply(channel, _contact(dept))
         db.add_message(pid, "bot", reply, rag_sources=[], answer_quality="deflected_no_source")
-        _record_medium_alert(pid, flag, msg_id)
+        # 知識庫外提問進入護理端待處理清單（level=info，不推播、不承諾回覆）
+        db.add_alert(pid, f"知識庫外提問：{query_text[:40]}", "info", msg_id, notified_channels=[])
         return _response(pid, reply, keywords=flag.matched_keywords)
 
-    system_prompt = build_prompt(profile, rag_docs)
+    system_prompt = build_prompt(profile, rag_docs, channel=channel, emergency_contact=_contact(dept))
     history = db.get_history(pid, limit=12)
+    # 病患這則訊息在流程開頭已落庫，會出現在 history 最後；query_text 又會再送一次 → 去重，避免重複
+    if history and history[-1]["role"] == "patient" and history[-1]["content"] == query_text:
+        history = history[:-1]
     model_id = settings.PRIMARY_MODEL
 
     try:
@@ -166,37 +203,58 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
         logging.error(f"[LLM Error] {e}")
         es = str(e)
         if "429" in es or "RESOURCE_EXHAUSTED" in es:
-            reply = "⚠️ 今日諮詢次數暫時用完，請明天再試。"
+            reply = "⚠️ 目前諮詢人數較多，請稍後再試。"
         elif "timeout" in es.lower():
             reply = "⚠️ 回應逾時，請重新提問。"
         else:
             reply = "⚠️ 系統暫時無法回應，請稍後再試。"
-        reply += f"如有緊急狀況，{_help_text(channel)}"
+        reply += f"如有緊急狀況，{_help_text(channel, dept)}"
         db.add_message(pid, "bot", reply, rag_sources=sources, model_id=model_id,
                        provider=settings.LLM_PROVIDER, answer_quality="llm_error")
-        _record_medium_alert(pid, flag, msg_id)
+        return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
+
+    versions = {d["code"]: d.get("doc_version", "") for d in rag_docs if d.get("code")}
+    if result.refused or not result.text.strip():
+        label = "llm_refusal"
+    else:
+        known = await asyncio.to_thread(retriever.known_codes)
+        label = quality.classify(result.text, rag_docs, known)
+    if label in ("llm_refusal", "deflected_unanswerable"):
+        # 模型拒答、回傳空白，或依規則表示「資料無法回答」：不顯示模型的文字，
+        # 改回固定轉介文字，並把問題放進護理端待處理清單
+        reply = deflect_reply(channel, _contact(dept))
+        db.add_message(pid, "bot", lead + reply, rag_sources=sources,
+                       model_id=result.model_id, provider=result.provider,
+                       prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
+                       answer_quality=label, rag_doc_versions=versions)
+        db.add_alert(pid, f"衛教資料無法回答：{query_text[:40]}", "info", msg_id, notified_channels=[])
         return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
 
     reply = result.text
     db.add_message(pid, "bot", lead + reply, rag_sources=sources,
-                   model_id=model_id, provider=result.provider,
+                   model_id=result.model_id, provider=result.provider,
                    prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
-                   answer_quality=quality.classify(reply, rag_docs))
-    _record_medium_alert(pid, flag, msg_id)
+                   answer_quality=label, rag_doc_versions=versions)
     return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
 
 
-def _record_medium_alert(pid: str, flag, msg_id: int):
-    if flag.severity == "medium":
-        db.add_alert(pid, "；".join(flag.matched_keywords) or f"vector:{flag.via}",
-                     "medium", msg_id, notified_channels=[])
+async def _record_medium_alert(pid: str, flag, msg_id: int, channel: Channel, text: str):
+    """MEDIUM 紅旗：推播（非緊急）並落庫，進入護理端未確認清單。v1 只落庫、不通知任何人。"""
+    if flag.severity != "medium":
+        return
+    await _notify({
+        "type": "MEDIUM_FLAG", "severity": "medium",
+        "patient_id": pid, "channel": channel, "message": text,
+        "keywords": flag.matched_keywords, "category": flag.category, "via": flag.via,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }, pid, "；".join(flag.matched_keywords) or f"vector:{flag.via}", "medium", msg_id)
 
 
 def load_profile(patient_code: str) -> PatientProfile | None:
     """組 prompt 用的病患資料。刻意不讀 real_name：真名不該送進第三方 LLM（資安審查 S5）。"""
     with db.get_conn() as conn:
         row = conn.execute(
-            "SELECT pseudonym, age, cancer_type, diagnosis, medications, education_level "
+            "SELECT pseudonym, age, cancer_type, diagnosis, medications, education_level, department "
             "FROM patients WHERE pseudonym=?", (patient_code,)
         ).fetchone()
     if not row:
@@ -207,4 +265,5 @@ def load_profile(patient_code: str) -> PatientProfile | None:
         diagnosis=json.loads(row["diagnosis"] or "[]"),
         medications=json.loads(row["medications"] or "[]"),
         education_level=row["education_level"] or "general",
+        department=row["department"],
     )
