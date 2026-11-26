@@ -50,3 +50,6 @@ skills_extracted/
 
 # 檢索評估的逐題輸出（scripts/eval_retrieval.py 產生；摘要記錄在 docs/knowledge/檢索評估.md）
 backend/retrieval_eval_results.json
+
+# Claude 實測的逐題輸出（scripts/live_llm_eval.py）
+eval_results/
