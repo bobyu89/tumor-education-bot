@@ -419,6 +419,49 @@
     padding: 6px 8px; border: 1px solid var(--outline-var); border-radius: 6px; font: inherit; font-size: 12px;
   }
   .admin-note { font-size: 11px; color: var(--outline); margin-top: 6px; }
+  /* ── 單張管理（全螢幕面板）── */
+  .kb-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 1000; overflow: auto; }
+  .kb-panel { max-width: 1180px; margin: 16px auto; background: var(--surface); border-radius: var(--radius);
+              padding: 16px 20px 20px; min-height: calc(100vh - 32px); box-sizing: border-box; }
+  .kb-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .kb-head h3 { margin: 0; color: var(--primary); font-size: 18px; }
+  .kb-head select { padding: 5px 8px; border: 1px solid var(--outline-var); border-radius: 6px; font: inherit; }
+  .kb-close { margin-left: auto; cursor: pointer; font-size: 22px; color: var(--outline); background: none; border: 0; }
+  .kb-cols { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 16px; }
+  .kb-card { background: var(--surface-lowest); border: 1px solid var(--outline-var); border-radius: 12px; padding: 12px; }
+  .kb-card h4 { margin: 0 0 8px; font-size: 14px; color: var(--on-surface); }
+  .kb-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .kb-table th { text-align: left; color: var(--outline); font-weight: 500; padding: 4px 6px;
+                 border-bottom: 1px solid var(--outline-var); white-space: nowrap; }
+  .kb-table td { padding: 6px; border-bottom: 1px solid var(--surface-container); vertical-align: top; }
+  .kb-table tr.off td { color: var(--outline); }
+  .kb-badge { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: var(--radius-full);
+              background: var(--surface-container); color: var(--on-surface-var); white-space: nowrap; }
+  .kb-badge.up { background: var(--mint); color: var(--primary); }
+  .kb-badge.off { background: #fdecea; color: var(--red-flag); }
+  .kb-badge.draft { background: #fff3e0; color: var(--amber); }
+  .kb-form { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; font-size: 12px; }
+  .kb-form label { display: flex; flex-direction: column; gap: 2px; color: var(--on-surface-var); }
+  .kb-form input, .kb-form textarea { padding: 6px 8px; border: 1px solid var(--outline-var); border-radius: 6px;
+                                      font: inherit; font-size: 13px; color: var(--on-surface); }
+  .kb-form .full { grid-column: 1 / -1; }
+  .kb-body-edit { width: 100%; box-sizing: border-box; min-height: 320px; font-family: ui-monospace, Consolas, monospace;
+                  font-size: 12px; line-height: 1.6; padding: 8px; border: 1px solid var(--outline-var); border-radius: 6px; }
+  .kb-msg { font-size: 12px; padding: 6px 8px; border-radius: 6px; margin: 4px 0; }
+  .kb-msg.err { background: #fdecea; color: var(--red-flag); }
+  .kb-msg.warn { background: #fff3e0; color: #8a3a00; }
+  .kb-msg.ok { background: var(--mint); color: var(--primary); }
+  .kb-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  .kb-acts { white-space: nowrap; }
+  .kb-chunk { font-size: 11px; background: var(--surface-low); border-radius: 6px; padding: 6px 8px; margin: 4px 0;
+              white-space: pre-wrap; }
+  @media (max-width: 860px) {
+    .kb-panel { margin: 0; border-radius: 0; padding: 12px 16px; }
+    .kb-cols { grid-template-columns: minmax(0, 1fr); }
+    .kb-form { grid-template-columns: 1fr; }
+    .kb-acts { white-space: normal; }
+    .kb-acts .adm-btn { display: block; width: 100%; margin-bottom: 4px; white-space: nowrap; }
+  }
   .tag-pill {
     background: var(--surface-low);
     border-radius: var(--radius-full);
@@ -777,11 +820,37 @@
       </div>
 
       <div class="r-section">
+        <div class="r-section-title">衛教單張</div>
+        <div class="action-btns">
+          <button class="action-btn" onclick="openKb()">📚 單張管理（上傳、上架、停用、版本）</button>
+        </div>
+      </div>
+
+      <div class="r-section">
         <div class="r-section-title">人員存取稽核</div>
         <div class="action-btns">
           <button class="action-btn" onclick="showStaffAudit()">🛡️ 查看所有人員操作紀錄</button>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ 單張管理（管理者）══════════════ -->
+<div id="kb-overlay" class="kb-overlay" style="display:none;" role="dialog" aria-label="單張管理">
+  <div class="kb-panel">
+    <div class="kb-head">
+      <h3>📚 衛教單張管理</h3>
+      <select id="kb-dept" onchange="loadKbList()" title="科別"></select>
+      <button class="action-btn" onclick="kbShowUpload()">＋ 上傳單張</button>
+      <button class="kb-close" onclick="closeKb()" aria-label="關閉">✕</button>
+    </div>
+    <div class="admin-note" style="margin:0 0 10px;">
+      單張內容請照院內核可版本上傳，系統只做格式轉換、不改寫。上架或停用後立即生效（下一則病人提問就使用新版），每一版都保留，可隨時退回。
+    </div>
+    <div class="kb-cols">
+      <div class="kb-card"><h4>目前的單張</h4><div id="kb-list">載入中…</div></div>
+      <div class="kb-card" id="kb-work"><div class="admin-note">選一份單張查看版本紀錄，或按「上傳單張」。</div></div>
     </div>
   </div>
 </div>
@@ -1355,6 +1424,251 @@ async function createPatient() {
   }
   ['np-code', 'np-cancer', 'np-age'].forEach(id => document.getElementById(id).value = '');
   loadAdminPatients();
+}
+
+// ── 管理者：單張管理 ──
+let KB = { dept: '', items: [], draft: null };
+const KB_STATUS = { draft: ['草稿', 'draft'], published: ['上架中', 'up'], retired: ['已停用', 'off'],
+                    superseded: ['已取代', ''], discarded: ['已捨棄', ''] };
+const KB_FORMAT = { md: 'Markdown', docx: 'Word', pdf: 'PDF', retire: '停用紀錄' };
+
+async function openKb() {
+  document.getElementById('kb-overlay').style.display = 'block';
+  const sel = document.getElementById('kb-dept');
+  if (!sel.options.length) {
+    try {
+      const list = await (await apiFetch('/departments')).json();
+      sel.innerHTML = list.map(d => `<option value="${escHtml(d.id)}"${d.default ? ' selected' : ''}>${escHtml(d.name)}</option>`).join('');
+    } catch { sel.innerHTML = '<option value="">預設科別</option>'; }
+  }
+  loadKbList();
+}
+function closeKb() { document.getElementById('kb-overlay').style.display = 'none'; }
+
+async function kbJson(res) {
+  const d = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(typeof d.detail === 'string' ? d.detail : '操作失敗（' + res.status + '）');
+  return d;
+}
+
+async function loadKbList() {
+  KB.dept = document.getElementById('kb-dept').value;
+  const box = document.getElementById('kb-list');
+  try {
+    const d = await kbJson(await apiFetch(`/admin/leaflets?dept=${encodeURIComponent(KB.dept)}`));
+    KB.items = d.items;
+    box.innerHTML = `<table class="kb-table"><tr><th>代碼</th><th>單張</th><th>版本</th><th>狀態</th><th></th></tr>` +
+      d.items.map(i => `<tr class="${i.active ? '' : 'off'}">
+        <td style="white-space:nowrap;"><b>${escHtml(i.code)}</b></td>
+        <td>${escHtml(i.title || i.topic)}<div class="adm-meta">${escHtml(i.category)}${i.chunks ? '・' + i.chunks + ' 段' : ''}</div></td>
+        <td>${escHtml(i.doc_version)}<div>${!i.active ? '' : i.origin === 'uploaded'
+              ? `<span class="kb-badge up" title="${escHtml((i.updated_by || '') + ' ' + fmtTime(i.updated_at))}">後台上架</span>`
+              : '<span class="kb-badge">院內原始</span>'}</div></td>
+        <td>${i.active ? '<span class="kb-badge up">使用中</span>' : '<span class="kb-badge off">已停用</span>'}
+            ${i.drafts ? `<div><span class="kb-badge draft">草稿 ${i.drafts}</span></div>` : ''}</td>
+        <td class="kb-acts"><button class="adm-btn" data-code="${escHtml(i.code)}" onclick="kbShowVersions(this.dataset.code)">版本</button>
+            <button class="adm-btn" data-code="${escHtml(i.code)}" onclick="kbShowUpload(this.dataset.code)">上傳新版</button></td>
+      </tr>`).join('') + '</table>';
+  } catch (e) { box.textContent = '無法載入：' + e.message; }
+}
+
+function kbFocusWork() {
+  if (window.innerWidth <= 860) document.getElementById('kb-work').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function kbShowUpload(code = '') {
+  const cur = KB.items.find(i => i.code === code) || {};
+  document.getElementById('kb-work').innerHTML = `
+    <h4>${code ? `上傳 ${escHtml(code)} 的新版本` : '上傳單張'}</h4>
+    <div class="kb-form">
+      <label class="full">檔案（Word .docx、Markdown .md 或 PDF）<input type="file" id="kb-file" accept=".docx,.md,.markdown,.pdf"></label>
+      <label>單張代碼<input id="kb-code" value="${escHtml(code)}" ${code ? 'readonly' : ''} placeholder="例如 ONC-41"></label>
+      <label>新版本<input id="kb-doc_version" placeholder="例如 2026.12 九版（改版必填，須與目前不同）"></label>
+      <label>標題<input id="kb-title" value="${escHtml(cur.title || '')}" placeholder="留空 = 沿用檔案或目前版本"></label>
+      <label>主題<input id="kb-topic" value="${escHtml(cur.topic || '')}" placeholder="例如 口腔黏膜炎"></label>
+      <label>分類<input id="kb-category" value="${escHtml(cur.category || '')}" placeholder="例如 血液腫瘤"></label>
+      <label>發行單位<input id="kb-source" placeholder="留空 = 沿用目前版本"></label>
+    </div>
+    ${cur.doc_version ? `<div class="admin-note">目前版本：${escHtml(cur.doc_version)}</div>` : ''}
+    <div class="kb-actions"><button class="action-btn" onclick="kbUpload()">轉換並預覽</button>
+      <span class="admin-note">預覽後才會上架，上傳不會影響病人。</span></div>
+    <div id="kb-upload-msg"></div>`;
+  kbFocusWork();
+}
+
+function kbFileB64(file) {
+  return new Promise((ok, fail) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result).split(',')[1] || '');
+    r.onerror = () => fail(new Error('無法讀取檔案'));
+    r.readAsDataURL(file);
+  });
+}
+
+async function kbUpload() {
+  const f = document.getElementById('kb-file').files[0];
+  const msg = document.getElementById('kb-upload-msg');
+  if (!f) { msg.innerHTML = '<div class="kb-msg err">請選擇檔案</div>'; return; }
+  if (f.size > 10 * 1024 * 1024) { msg.innerHTML = '<div class="kb-msg err">檔案超過 10 MB</div>'; return; }
+  msg.innerHTML = '<div class="kb-msg">轉換中…</div>';
+  const body = { dept: KB.dept, filename: f.name, content_b64: await kbFileB64(f) };
+  ['code', 'doc_version', 'title', 'topic', 'category', 'source'].forEach(k => body[k] = document.getElementById('kb-' + k).value.trim());
+  try {
+    KB.draft = await kbJson(await apiFetch('/admin/leaflets/drafts', { method: 'POST', body: JSON.stringify(body) }));
+    kbRenderDraft();
+    loadKbList();
+  } catch (e) { msg.innerHTML = `<div class="kb-msg err">${escHtml(e.message)}</div>`; }
+}
+
+function kbRenderDraft() {
+  const d = KB.draft, p = d.preview, m = d.meta;
+  const field = (k, label) => `<label>${label}<input id="kbd-${k}" value="${escHtml(m[k])}"></label>`;
+  document.getElementById('kb-work').innerHTML = `
+    <h4>預覽：${escHtml(m.code || '（未填代碼）')} ${escHtml(m.title)} <span class="kb-badge draft">草稿 #${d.id}</span>
+      <span class="adm-meta">來源：${escHtml(KB_FORMAT[d.format] || d.format)} ${escHtml(d.original_name || '')}</span></h4>
+    ${p.errors.map(e => `<div class="kb-msg err">⛔ ${escHtml(e)}</div>`).join('')}
+    ${p.warnings.map(w => `<div class="kb-msg warn">⚠️ ${escHtml(w)}</div>`).join('')}
+    ${p.changes.samples.length ? `<div class="admin-note">差異示例：${p.changes.samples.map(s =>
+        `「${escHtml(s.removed)}」→「${escHtml(s.added)}」`).join('；')}</div>` : ''}
+    <div class="kb-form" style="margin-top:8px;">
+      ${field('code', '單張代碼')}${field('doc_version', '版本')}${field('title', '標題')}
+      ${field('topic', '主題')}${field('category', '分類')}${field('source', '發行單位')}
+    </div>
+    <div style="margin-top:10px;font-size:12px;"><b>章節（共 ${p.chunk_count} 段進入知識庫）</b>
+      <table class="kb-table">${p.sections.map(s => `<tr class="${s.excluded ? 'off' : ''}"><td>${escHtml(s.name)}</td>
+        <td>${s.chars} 字</td><td>${s.excluded ? '不進知識庫' : s.chunks + ' 段'}</td></tr>`).join('')}</table>
+      <details style="margin-top:4px;"><summary class="adm-meta" style="cursor:pointer;">看切好的段落（病人提問時檢索的單位）</summary>
+        ${p.chunks.map(c => `<div class="kb-chunk">${escHtml(c.text)}</div>`).join('')}</details>
+    </div>
+    <div style="margin-top:10px;">
+      <div class="admin-note">內文（Markdown）：可以補上章節標題（「## 標題」）、修正斷行，<b>不要改內容</b>；改了文字系統會提醒。</div>
+      <textarea id="kbd-body" class="kb-body-edit" spellcheck="false"></textarea>
+    </div>
+    ${d.format === 'pdf' ? `<label class="kb-msg warn" style="display:block;cursor:pointer;">
+        <input type="checkbox" id="kbd-reviewed" ${d.reviewed ? 'checked' : ''}> 我已逐段與 PDF 原檔核對過上面的文字（斷行、表格、項目符號）</label>` : ''}
+    <div class="kb-actions">
+      <button class="action-btn" onclick="kbSaveDraft()">更新預覽</button>
+      <button class="adm-btn" onclick="kbDownloadOriginal(${d.id})">下載原檔核對</button>
+      <input id="kbd-note" placeholder="上架說明（選填，例如：院內 2026/12 改版）" style="flex:1;min-width:160px;padding:6px 8px;border:1px solid var(--outline-var);border-radius:6px;font:inherit;font-size:12px;">
+      <button class="action-btn" onclick="kbPublish()" ${p.errors.length ? 'disabled title="請先處理紅色的問題"' : ''}>✅ 上架</button>
+      <button class="adm-btn warn" onclick="kbDiscard()">捨棄草稿</button>
+    </div>
+    <div id="kb-draft-msg"></div>`;
+  // 內文直接設 value：escHtml 會把換行轉成 <br>，放進 textarea 會變成字面上的「<br>」並被存回去
+  document.getElementById('kbd-body').value = d.body;
+  kbFocusWork();
+}
+
+async function kbSaveDraft() {
+  const d = KB.draft, body = { body: document.getElementById('kbd-body').value };
+  ['code', 'doc_version', 'title', 'topic', 'category', 'source'].forEach(k => body[k] = document.getElementById('kbd-' + k).value.trim());
+  const rv = document.getElementById('kbd-reviewed');
+  if (rv) body.reviewed = rv.checked;
+  try {
+    KB.draft = await kbJson(await apiFetch(`/admin/leaflets/drafts/${d.id}`, { method: 'PUT', body: JSON.stringify(body) }));
+    kbRenderDraft();
+  } catch (e) { document.getElementById('kb-draft-msg').innerHTML = `<div class="kb-msg err">${escHtml(e.message)}</div>`; }
+}
+
+async function kbPublish() {
+  await kbSaveDraft();
+  const d = KB.draft;
+  if (d.preview.errors.length) return;
+  const rv = document.getElementById('kbd-reviewed');
+  if (d.format === 'pdf' && !(rv && rv.checked)) {
+    document.getElementById('kb-draft-msg').innerHTML = '<div class="kb-msg err">PDF 必須逐段核對後才能上架，請勾選核對</div>';
+    return;
+  }
+  if (!confirm(`確定上架 ${d.meta.code}（${d.meta.doc_version}）？\n上架後病人的提問會立刻改用這一版。`)) return;
+  const note = document.getElementById('kbd-note').value.trim();
+  const msg = document.getElementById('kb-draft-msg');
+  msg.innerHTML = '<div class="kb-msg">上架並更新知識庫中…</div>';
+  try {
+    const r = await kbJson(await apiFetch(`/admin/leaflets/drafts/${d.id}/publish`, {
+      method: 'POST', body: JSON.stringify({ reviewed: !!(rv && rv.checked), note }) }));
+    KB.draft = null;
+    document.getElementById('kb-work').innerHTML = `<div class="kb-msg ok">✅ ${escHtml(r.code)} 已上架。
+      知識庫新增 ${r.sync.added} 段、移除 ${r.sync.removed} 段舊版。</div>`;
+    loadKbList();
+  } catch (e) { msg.innerHTML = `<div class="kb-msg err">${escHtml(e.message)}</div>`; }
+}
+
+async function kbDiscard() {
+  if (!confirm('捨棄這份草稿？（不影響目前上架中的版本）')) return;
+  try {
+    await kbJson(await apiFetch(`/admin/leaflets/drafts/${KB.draft.id}`, { method: 'DELETE' }));
+    KB.draft = null;
+    document.getElementById('kb-work').innerHTML = '<div class="kb-msg">已捨棄草稿</div>';
+    loadKbList();
+  } catch (e) { alert(e.message); }
+}
+
+async function kbDownloadOriginal(id) {
+  const res = await apiFetch(`/admin/leaflets/versions/${id}/original`);
+  if (!res.ok) { alert('原檔不存在'); return; }
+  const name = decodeURIComponent((res.headers.get('content-disposition') || '').split("filename*=utf-8''")[1] || `leaflet-${id}`);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(await res.blob());
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function kbShowVersions(code) {
+  const work = document.getElementById('kb-work');
+  try {
+    const d = await kbJson(await apiFetch(`/admin/leaflets/${encodeURIComponent(KB.dept)}/${encodeURIComponent(code)}/versions`));
+    const cur = d.current || {};
+    const rows = d.versions.map(v => {
+      const [label, cls] = KB_STATUS[v.status] || [v.status, ''];
+      const canRestore = v.published_at && v.source_format !== 'retire' && v.status !== 'published';
+      return `<tr><td>#${v.id}</td><td>${escHtml(v.doc_version)}<div class="adm-meta">${escHtml(KB_FORMAT[v.source_format] || v.source_format)}
+            ${escHtml(v.original_name || '')}</div></td>
+          <td><span class="kb-badge ${cls}">${label}</span>${v.reviewed ? '<div class="adm-meta">已逐段核對</div>' : ''}</td>
+          <td class="adm-meta">${escHtml(v.published_by || v.created_by || '')}<br>${escHtml(fmtTime(v.published_at || v.created_at))}
+            ${v.note ? `<br>${escHtml(v.note)}` : ''}</td>
+          <td style="white-space:nowrap;">
+            ${v.status === 'draft' ? `<button class="adm-btn" onclick="kbOpenDraft(${v.id})">繼續編輯</button>` : ''}
+            ${canRestore ? `<button class="adm-btn" data-code="${escHtml(code)}" onclick="kbRestore(this.dataset.code, ${v.id})">退回到這一版</button>` : ''}
+            ${v.original_name ? `<button class="adm-btn" onclick="kbDownloadOriginal(${v.id})">原檔</button>` : ''}</td></tr>`;
+    }).join('');
+    work.innerHTML = `<h4>${escHtml(code)} ${escHtml(cur.title || '')}</h4>
+      <div class="admin-note">目前：${escHtml(cur.doc_version || '')}・${cur.origin === 'uploaded' ? '後台上架' : '院內原始'}・${cur.active ? '使用中' : '已停用'}</div>
+      <div class="kb-actions">
+        <button class="action-btn" data-code="${escHtml(code)}" onclick="kbShowUpload(this.dataset.code)">上傳新版</button>
+        ${cur.active ? `<button class="adm-btn warn" data-code="${escHtml(code)}" onclick="kbRetire(this.dataset.code)">停用這份單張</button>` : ''}
+        ${cur.has_builtin && cur.origin === 'uploaded' ? `<button class="adm-btn" data-code="${escHtml(code)}" onclick="kbRestore(this.dataset.code, null)">退回院內原始版</button>` : ''}
+      </div>
+      ${rows ? `<table class="kb-table" style="margin-top:10px;"><tr><th>#</th><th>版本</th><th>狀態</th><th>操作者</th><th></th></tr>${rows}</table>`
+             : '<div class="admin-note" style="margin-top:10px;">這份單張還沒有在後台改過版，目前使用院內原始版。</div>'}
+      <div id="kb-ver-msg"></div>`;
+    kbFocusWork();
+  } catch (e) { work.innerHTML = `<div class="kb-msg err">${escHtml(e.message)}</div>`; }
+}
+
+async function kbOpenDraft(id) {
+  try { KB.draft = await kbJson(await apiFetch(`/admin/leaflets/drafts/${id}`)); kbRenderDraft(); }
+  catch (e) { alert(e.message); }
+}
+
+async function kbRetire(code) {
+  const note = prompt(`停用 ${code}？停用後病人的提問不會再用到這份單張（可隨時退回）。\n請輸入停用原因：`);
+  if (note === null) return;
+  try {
+    await kbJson(await apiFetch(`/admin/leaflets/${encodeURIComponent(KB.dept)}/${encodeURIComponent(code)}/retire`,
+      { method: 'POST', body: JSON.stringify({ note }) }));
+    await loadKbList(); kbShowVersions(code);
+  } catch (e) { alert(e.message); }
+}
+
+async function kbRestore(code, versionId) {
+  const what = versionId ? `版本 #${versionId}` : '院內原始版';
+  if (!confirm(`把 ${code} 退回到${what}？病人的提問會立刻改用那一版。`)) return;
+  try {
+    await kbJson(await apiFetch(`/admin/leaflets/${encodeURIComponent(KB.dept)}/${encodeURIComponent(code)}/restore`,
+      { method: 'POST', body: JSON.stringify({ version_id: versionId }) }));
+    await loadKbList(); kbShowVersions(code);
+  } catch (e) { alert(e.message); }
 }
 
 function renderLog(items, emptyText) {

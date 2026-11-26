@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 5   # v2：assessment_state；v3：events.actor + LINE 通行碼綁定；v4：messages.rag_doc_versions；v5：patients.department
+SCHEMA_VERSION = 6   # v2：assessment_state；v3：events.actor + LINE 通行碼綁定；v4：messages.rag_doc_versions；v5：patients.department；v6：leaflet_versions
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "tumor_bot.sqlite3"
 
 
@@ -178,6 +178,29 @@ CREATE TABLE IF NOT EXISTS line_events_seen (
     event_id TEXT PRIMARY KEY,
     ts       TEXT NOT NULL
 );
+
+-- 單張管理後台的版本紀錄（backend/leaflets.py）：草稿、上架、停用、被取代；上架中的內容另寫到 data/leaflets/
+CREATE TABLE IF NOT EXISTS leaflet_versions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    dept            TEXT NOT NULL,
+    code            TEXT NOT NULL,
+    title           TEXT,
+    topic           TEXT,
+    category        TEXT,
+    doc_version     TEXT,
+    source          TEXT,
+    source_format   TEXT NOT NULL,            -- md | docx | pdf | retire（停用紀錄）
+    original_name   TEXT,
+    original_sha256 TEXT,
+    markdown        TEXT NOT NULL,            -- 上架用的全文（含 frontmatter）
+    extracted_text  TEXT,                     -- 原檔轉出的文字，比對管理者是否改了內容
+    status          TEXT NOT NULL,            -- draft | published | retired | superseded | discarded
+    reviewed        INTEGER NOT NULL DEFAULT 0,
+    created_by      TEXT, created_at TEXT NOT NULL,
+    published_by    TEXT, published_at TEXT,
+    note            TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_leaflet_versions ON leaflet_versions(dept, code, id);
 
 CREATE TABLE IF NOT EXISTS schema_version (
     version    INTEGER PRIMARY KEY,
