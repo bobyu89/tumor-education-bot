@@ -6,6 +6,9 @@
 > ⚠️ 本系統僅供衛教參考，不做診斷、不建議藥物劑量。碰真實病患前請先完成 IRB 與資料隱私規範
 > （見 [`docs/specs/`](docs/specs/)）。
 
+**系統架構（現行）**：[`Obsidian_Vault/系統文件/v3.0 系統架構書.md`](Obsidian_Vault/系統文件/v3.0%20系統架構書.md)
+—— 處理流程、模組、知識庫（RAG／CAG）、LLM、安全設計、資料庫、API、部署、測試結果與上線前待辦。
+
 **線上演示（GitHub Pages，純前端）**：<https://bobyu89.github.io/tumor-education-bot/> —— 紅旗攔截、症狀追問、
 有來源的衛教回覆與護理站即時警示都在瀏覽器內模擬，不需安裝、不需 API key。頁面由 `scripts/build_pages.py` 產生資料、
 `docs/demo_engine.js` 移植後端規則（`node scripts/test_pages_engine.js` 驗證）。
