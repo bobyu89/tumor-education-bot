@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     CHROMA_DB_PATH: str = str(Path(__file__).parent.parent / "chroma_db")
     COLLECTION_NAME: str = "patient_education"
     RAG_TOP_K: int = 5
+    # 知識庫交給模型的方式：rag = 檢索相關段落；cag = 整個科別的單張全文（搭配 prompt caching）；
+    # auto = 科別單張總字數不超過 CAG_MAX_CHARS 用 cag，否則 rag。比較結果見 docs/knowledge/Claude實測結果.md
+    KB_MODE: str = "rag"
+    CAG_MAX_CHARS: int = 60000
 
     # ── 認證 ──
     # token 簽章密鑰。正式環境務必設定固定值（多 worker 部署需一致）；

@@ -30,6 +30,13 @@ class LLMResult:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     refused: bool = False               # 模型基於安全政策拒答（stop_reason == "refusal"）
+    cache_read_tokens: int = 0          # CAG：從 prompt cache 讀取的 token（計費約 1/10）
+    cache_write_tokens: int = 0         # CAG：寫入 prompt cache 的 token（計費約 1.25 倍）
+
+
+def system_text(system_prompt: "str | list[str]") -> str:
+    """CAG 的 system 是 [固定前段, 變動後段]；不支援分段的供應商合併成一段。"""
+    return system_prompt if isinstance(system_prompt, str) else "\n\n".join(system_prompt)
 
 
 class LLMError(Exception):
@@ -50,6 +57,7 @@ class GemmaClient:
     def generate(self, system_prompt: str, history: list[dict], user_message: str,
                  model_id: str) -> LLMResult:
         types = self._types
+        system_prompt = system_text(system_prompt)
         # Gemma 不支援 system_instruction，改把精簡指令注入成 user/model 對話開頭
         contents = [
             types.Content(role="user", parts=[types.Part.from_text(text=system_prompt)]),
@@ -108,10 +116,16 @@ class ClaudeClient:
             role = "user" if msg["role"] in ("user", "patient") else "assistant"
             messages.append({"role": role, "content": msg["content"]})
         messages.append({"role": "user", "content": user_message})
+        if isinstance(system_prompt, str):
+            system = system_prompt
+        else:
+            # CAG：固定前段（安全規則＋本科全部單張＋回答規則）標記快取；同科別的下一則提問直接讀快取
+            system = [{"type": "text", "text": system_prompt[0], "cache_control": {"type": "ephemeral"}},
+                      *({"type": "text", "text": t} for t in system_prompt[1:])]
         req = {
             "model": model_id,
             "max_tokens": settings.LLM_MAX_TOKENS,
-            "system": system_prompt,
+            "system": system,
             "messages": messages,
             "output_config": {"effort": settings.LLM_EFFORT},
         }
@@ -144,13 +158,18 @@ class ClaudeClient:
             logging.warning("[LLM] 模型拒答 category=%s request_id=%s",
                             getattr(details, "category", None), getattr(resp, "_request_id", None))
         text = "" if refused else "".join(b.text for b in resp.content if b.type == "text")
+        cache_read = getattr(resp.usage, "cache_read_input_tokens", 0) or 0
+        cache_write = getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
         return LLMResult(
             text=text,
             model_id=getattr(resp, "model", None) or requested_model,
             provider=self.provider,
-            prompt_tokens=resp.usage.input_tokens,
+            # 輸入 token 總數（含快取讀寫），研究資料估算用量時才不會漏掉 CAG 的知識庫部分
+            prompt_tokens=(resp.usage.input_tokens or 0) + cache_read + cache_write,
             completion_tokens=resp.usage.output_tokens,
             refused=refused,
+            cache_read_tokens=cache_read,
+            cache_write_tokens=cache_write,
         )
 
 
@@ -185,6 +204,8 @@ class MockClient:
 
     def generate(self, system_prompt: str, history: list[dict], user_message: str,
                  model_id: str) -> LLMResult:
+        # 演示模式只支援 RAG 格式（依相關度挑段落）；CAG 的全單張沒有相關度，會一律輸出「無法回答」
+        system_prompt = system_text(system_prompt)
         docs = [(m.group("source").strip(), m.group("content").strip())
                 for m in _RAG_BLOCK.finditer(system_prompt)
                 if float(m.group("score")) >= _mock_min_score()]

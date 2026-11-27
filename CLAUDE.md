@@ -5,7 +5,8 @@
 
 - 病患資料存於 SQLite（`backend/db.py`），身分與研究資料分表（去識別化）。**含病患資料的檔案（`.env`、`data/*.sqlite3`、`chroma_db/`、`models/`）絕不進版控。**
 - 嵌入層 `backend/embedding.py`（ONNX，不需 torch）：檢索用 multilingual-e5-small（`EMBED_MODEL`，查詢／段落加 `query: `／`passage: ` 前綴），紅旗向量層固定用 MiniLM（門檻在該模型上校準，不跟著換）。索引記錄建庫模型，不一致時 `index_vault.py` 自動重建、`rag.py` 拒絕檢索。換模型前先跑 `scripts/eval_retrieval.py`，見 `docs/knowledge/檢索評估.md`。
-- 測試不需 API key：`cd backend && python -X utf8 test_phase1.py`、`test_phase2.py`、`test_phase3.py`、`test_quiz.py`、`test_integration.py`、`test_redflag.py`、`test_alerts.py`、`test_llm_claude.py`、`test_kb_update.py`、`test_departments.py`、`test_leaflets.py`、`test_retrieval.py`（需已同步的索引）；演示引擎 `node scripts/test_pages_engine.js`。
+- 測試不需 API key：`cd backend && python -X utf8 test_phase1.py`、`test_phase2.py`、`test_phase3.py`、`test_quiz.py`、`test_integration.py`、`test_redflag.py`、`test_alerts.py`、`test_llm_claude.py`、`test_kb_update.py`、`test_departments.py`、`test_leaflets.py`、`test_cag.py`、`test_retrieval.py`（需已同步的索引）；演示引擎 `node scripts/test_pages_engine.js`。
+- 知識庫交給模型的方式 `KB_MODE`：`rag`（預設，檢索相關段落）、`cag`（`backend/kb.py`：本科全部單張放進 system 固定前段，Claude prompt caching）、`auto`（單張總字數 ≤ `CAG_MAX_CHARS` 用 cag）。實測比較用 `scripts/live_llm_eval.py --kb rag cag`。
 - 正式收案 LLM 為 Anthropic Claude Sonnet 5.5 或 Opus 5.5（`LLM_PROVIDER=anthropic`）；這兩個模型不接受 `temperature`，以 `LLM_EFFORT` 控制。
 - 衛教知識庫以院內現行 13 份單張為準，不修改單張內容；範圍外問題由系統轉介。
 - 科別：`knowledge/<科別>/manifest.json`（單張來源、緊急電話、紅旗擴充、症狀評估協定）；病患綁定科別，檢索、紅旗與評估都依科別。紅旗分「通用核心」（`redflag.py`）與「科別擴充」（manifest）。新增科別見 `docs/knowledge/新增科別說明.md`，不需改程式。

@@ -478,6 +478,8 @@ def _index_target():
 
 
 def sync_index() -> dict:
+    import kb
+    kb.invalidate()   # CAG 的單張全文也要換成新版
     col, embed = _index_target()
     try:
         chunks, _ = index_vault.build_chunks(overlay_root=store_dir())

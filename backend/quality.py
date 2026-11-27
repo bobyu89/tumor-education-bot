@@ -11,7 +11,8 @@
   citation_mismatch       回答標註了「沒有提供給模型」的單張代碼（可能用了資料以外的內容）
   deflected_no_source     無來源，前置就擋下
   deflected_unanswerable  模型依規則輸出「無法回答」標記，由系統改成固定轉介文字
-  deflected_off_source    模型自己說「需請護理師」等（未照標記規則，但同樣是轉介）
+  deflected_off_source    模型自己說「需請護理師」等，且沒有引用任何提供的單張（未照標記規則，但同樣是轉介）
+  safety_escalation       回答是安全規則的緊急指引（例如請撥 119），沒有引用單張：遵守安全規則，不算缺少依據
   redflag_shortcut        紅旗短路，未經 LLM（由 chat_service 標記）
 
 注意：這仍不是逐句的語意 grounding 驗證；引用核對只能確認「標註的出處確實提供給模型」，
@@ -59,17 +60,23 @@ def cited_codes(reply: str, known_codes: frozenset[str] | set[str] = frozenset()
     return cited
 
 
+# 安全規則的緊急指引一定會出現的字樣（safety_text：撥打 119／1925 安心專線）
+_ESCALATION_SIGNALS = ["119", "1925"]
+
+
 def classify(reply: str, rag_docs: list[dict], known_codes: frozenset[str] | set[str] = frozenset()) -> str:
     """LLM 回答後標記品質。known_codes：知識庫所有單張代碼（rag.retriever.known_codes()）。"""
     if not rag_docs:
         return "deflected_no_source"
     if UNANSWERABLE_MARK in reply:
         return "deflected_unanswerable"
-    if any(sig in reply for sig in _DEFLECT_SIGNALS):
+    provided = provided_codes(rag_docs)
+    cited = cited_codes(reply, known_codes | provided)
+    # 已經引用提供的單張作答時，句中出現「無法回答」等字樣（例如「這部分我無法回答」）不算整題轉介
+    if any(sig in reply for sig in _DEFLECT_SIGNALS) and not (cited & provided):
         return "deflected_off_source"
-    cited = cited_codes(reply, known_codes | provided_codes(rag_docs))
     if not cited:
-        return "uncited"
+        return "safety_escalation" if any(s in reply for s in _ESCALATION_SIGNALS) else "uncited"
     if cited - provided_codes(rag_docs):
         return "citation_mismatch"
     return "grounded"

@@ -28,11 +28,12 @@ from datetime import datetime, timezone
 import assessment
 import db
 import departments
+import kb
 import quality
 from config import settings
 from llm_client import LLMError, get_client
 from models import ChatResponse, PatientProfile
-from prompt import build_prompt
+from prompt import build_prompt, build_system_blocks
 from rag import retriever
 from redflag import screen as redflag_screen
 from safety_text import deflect_reply, emergency_reply, escalation_reply, help_text
@@ -174,11 +175,16 @@ def _edu_query(ar, dept: str | None = None) -> str:
 
 async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Channel,
                       *, lead: str = "", code: str | None = None, dept: str | None = None) -> ChatResponse:
-    """RAG → 品質前置 → LLM → 品質標記 → 落庫。一般問答與評估後衛教共用。
-    code：限制檢索在單一衛教單張（評估後衛教用，症狀→單張對應是確定的，不該靠語意猜）。
-    dept：只檢索病患所屬科別的單張。"""
+    """知識庫 → 品質前置 → LLM → 品質標記 → 落庫。一般問答與評估後衛教共用。
+    知識庫依 kb.mode_for(dept)：rag = 檢索相關段落；cag = 本科全部單張（固定前段由 Claude 快取）。
+    code：限制在單一衛教單張（評估後衛教用，症狀→單張對應是確定的，不該靠語意猜）。
+    dept：只用病患所屬科別的單張。"""
     profile = load_profile(pid)
-    rag_docs = await asyncio.to_thread(retriever.query, query_text, code_filter=code, dept=dept)
+    cag = kb.mode_for(dept) == "cag"
+    if cag:
+        rag_docs = await asyncio.to_thread(kb.full_docs, dept, code)
+    else:
+        rag_docs = await asyncio.to_thread(retriever.query, query_text, code_filter=code, dept=dept)
     sources = [d["source"] for d in rag_docs]
 
     if not quality.pre_check(rag_docs):
@@ -188,7 +194,10 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
         db.add_alert(pid, f"知識庫外提問：{query_text[:40]}", "info", msg_id, notified_channels=[])
         return _response(pid, reply, keywords=flag.matched_keywords)
 
-    system_prompt = build_prompt(profile, rag_docs, channel=channel, emergency_contact=_contact(dept))
+    if cag:
+        system_prompt = build_system_blocks(profile, rag_docs, channel=channel, emergency_contact=_contact(dept))
+    else:
+        system_prompt = build_prompt(profile, rag_docs, channel=channel, emergency_contact=_contact(dept))
     history = db.get_history(pid, limit=12)
     # 病患這則訊息在流程開頭已落庫，會出現在 history 最後；query_text 又會再送一次 → 去重，避免重複
     if history and history[-1]["role"] == "patient" and history[-1]["content"] == query_text:
@@ -213,12 +222,19 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
                        provider=settings.LLM_PROVIDER, answer_quality="llm_error")
         return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
 
-    versions = {d["code"]: d.get("doc_version", "") for d in rag_docs if d.get("code")}
     if result.refused or not result.text.strip():
         label = "llm_refusal"
+        used = rag_docs
     else:
         known = await asyncio.to_thread(retriever.known_codes)
         label = quality.classify(result.text, rag_docs, known)
+        used = rag_docs
+        if cag:
+            # CAG 提供了整科單張：來源與版本只記回答實際引用的單張，不然每則都列出全部 13 份
+            cited = quality.cited_codes(result.text, known)
+            used = [d for d in rag_docs if d["code"] in cited]
+            sources = list(dict.fromkeys(d["source"] for d in used))
+    versions = {d["code"]: d.get("doc_version", "") for d in used if d.get("code")}
     if label in ("llm_refusal", "deflected_unanswerable"):
         # 模型拒答、回傳空白，或依規則表示「資料無法回答」：不顯示模型的文字，
         # 改回固定轉介文字，並把問題放進護理端待處理清單
