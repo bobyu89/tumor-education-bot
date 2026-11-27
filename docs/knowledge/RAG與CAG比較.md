@@ -162,3 +162,5 @@
 | K1：快取 TTL | `CACHE_TTL` 預設 `1h`（寫入 2 倍價，讀取 Sonnet 5.5 為 0.05 倍）。依 Claude 文件，提問間隔 5–60 分鐘時 1 小時 TTL 才划算，符合門診病人零星提問的型態；若收案後發現提問間隔多在 5 分鐘內，改回 `5m` 較便宜 |
 | K2：監控 | `messages` 新增 `cache_read_tokens`、`cache_write_tokens`、`refusal_category`（schema v7），研究匯出 CSV 一併輸出，可每週計算快取命中率、實際每題費用與拒答率 |
 | S1：拒答 | 依 Claude 文件，備援模型忙碌或不適用時，server-side fallback 不會接手，改在 `stop_details.recommended_model` 建議重試的模型。`ClaudeClient` 現在遇到拒答且有建議模型時，照建議直接重試一次（IRB 單一模型模式 `ANTHROPIC_REFUSAL_FALLBACK=false` 時不重試），並記錄拒答類別。實測腳本也記錄 `stop_details` 與 `usage.iterations`，供重現時判斷原因 |
+| S1 重現結果 | 同一題 RAG 5 次、CAG 2 次，加上兩題相近題目各 2 次，**11 次 0 次拒答**（花費 $0.16）。Sonnet 5.5 的備援清單是 `claude-sonnet-5`（不是空的）。上次是輸出 0 token 的拒答，屬於生成前的安全分類器攔截；Sonnet 5.5 的 `fallbacks: "default"` 只替 cyber、frontier_llm 兩類改用備援，bio、general_harms、reasoning_extraction 不處理，和上次 `fallback=False` 吻合。研判是偶發的分類器誤判（推測 general_harms 或 bio），但上次沒有記錄類別，無法確定 |
+| S1 處理 | 拒答而且沒有建議模型時，**同模型、同內容重試一次**（IRB 單一模型模式也適用）；重試仍拒答才給固定轉介文字。收案時依 `refusal_category` 統計拒答率：出現 bio、general_harms 時帶 request_id 回報 Anthropic，bio 反覆出現再考慮申請 Life Sciences Verification Program |

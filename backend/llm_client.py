@@ -143,17 +143,27 @@ class ClaudeClient:
         req = self.build_request(system_prompt, history, user_message, model_id)
         resp = self._create(req)
         result = self.parse_response(resp, model_id)
-        # 拒答且 server-side fallback 沒有接手時（例如備援模型忙碌），API 會在 stop_details.recommended_model
-        # 建議改用哪個模型：照建議直接重試一次。IRB 要求單一模型（ANTHROPIC_REFUSAL_FALLBACK=false）時不重試。
+        if not result.refused:
+            return result
+        # 拒答且 server-side fallback 沒有接手時重試一次（docs/knowledge/RAG與CAG比較.md 的 S1）：
+        # - 備援模型忙碌：API 在 stop_details.recommended_model 建議改用的模型 → 照建議重試
+        #   （IRB 要求單一模型，ANTHROPIC_REFUSAL_FALLBACK=false 時不換模型）
+        # - 其他（例如 general_harms、bio 類安全分類器誤判，Sonnet 5.5 的 "default" 備援不處理這幾類）：
+        #   同模型、同內容重試一次。實測這類拒答是偶發的（同一題重跑 11 次 0 次拒答）
         recommended = getattr(getattr(resp, "stop_details", None), "recommended_model", None)
-        if (result.refused and recommended and recommended != result.model_id
-                and settings.ANTHROPIC_REFUSAL_FALLBACK):
-            logging.warning("[LLM] 拒答後改用建議模型 %s 重試", recommended)
+        if recommended and recommended != result.model_id and settings.ANTHROPIC_REFUSAL_FALLBACK:
+            logging.warning("[LLM] 拒答（%s）後改用建議模型 %s 重試", result.refusal_category, recommended)
             retry = self.build_request(system_prompt, history, user_message, recommended)
             retry.pop("fallbacks", None)
             retry.pop("betas", None)
-            result = self.parse_response(self._create(retry), recommended)
-        return result
+            retry_model = recommended
+        else:
+            logging.warning("[LLM] 拒答（%s）後以同模型重試一次", result.refusal_category)
+            retry, retry_model = req, model_id
+        retried = self.parse_response(self._create(retry), retry_model)
+        if retried.refused:
+            retried.refusal_category = retried.refusal_category or result.refusal_category
+        return retried
 
     def _create(self, req: dict):
         a = self._anthropic
