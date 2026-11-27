@@ -21,12 +21,14 @@ import auth
 import binding
 import db
 import departments
+import leaflets
 import line_bot
 import quiz
 import stats
 from chat_service import process_message
 from config import settings
-from models import ChatRequest, ChatResponse, LoginRequest, PatientCreate, QuizSubmit
+from models import (ChatRequest, ChatResponse, LeafletAction, LeafletDraftUpdate, LeafletUpload, LoginRequest,
+                    PatientCreate, QuizSubmit)
 from rag import retriever
 from security import (admin_user, check_patient_code, is_valid_patient_code,
                       patient_user, staff_from_ws_ticket, staff_user)
@@ -287,6 +289,88 @@ async def admin_unbind(patient_code: str, user: dict = Depends(admin_user)):
     if not binding.unbind(patient_code, user["account"]):
         raise HTTPException(status_code=404, detail="此病患目前沒有綁定 LINE")
     return {"unbound": patient_code}
+
+
+# ── 管理者：單張管理（上傳 → 預覽 → 上架／停用／退回）─────────────
+def _leaflet_call(fn, *args, **kwargs):
+    """leaflets 模組的錯誤轉成 HTTP 狀態碼：可修正的問題 400、找不到 404。"""
+    try:
+        return fn(*args, **kwargs)
+    except leaflets.LeafletError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+def _chunk_counts(dept: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    if retriever.collection.count():
+        for m in retriever.collection.get(where={"dept": dept}, include=["metadatas"])["metadatas"]:
+            counts[m.get("code", "")] = counts.get(m.get("code", ""), 0) + 1
+    return counts
+
+
+@app.get("/admin/leaflets")
+async def admin_list_leaflets(dept: str = Query(default=None), user: dict = Depends(admin_user)):
+    dept = dept or settings.DEFAULT_DEPARTMENT
+    return {"dept": dept, "items": _leaflet_call(leaflets.list_leaflets, dept, _chunk_counts(dept))}
+
+
+@app.get("/admin/leaflets/{dept}/{code}/versions")
+async def admin_leaflet_versions(dept: str, code: str, user: dict = Depends(admin_user)):
+    item = next((x for x in _leaflet_call(leaflets.list_leaflets, dept) if x["code"] == code.upper()), None)
+    return {"dept": dept, "code": code.upper(), "current": item,
+            "versions": _leaflet_call(leaflets.versions, dept, code)}
+
+
+@app.post("/admin/leaflets/drafts", status_code=201)
+async def admin_upload_leaflet(req: LeafletUpload, user: dict = Depends(admin_user)):
+    meta = req.model_dump(include={"code", "title", "topic", "category", "doc_version", "source"})
+    return _leaflet_call(leaflets.create_draft, req.dept, req.filename, req.content_b64, meta, user["account"])
+
+
+@app.get("/admin/leaflets/drafts/{version_id}")
+async def admin_get_draft(version_id: int, user: dict = Depends(admin_user)):
+    return _leaflet_call(leaflets.get_draft, version_id)
+
+
+@app.put("/admin/leaflets/drafts/{version_id}")
+async def admin_update_draft(version_id: int, req: LeafletDraftUpdate, user: dict = Depends(admin_user)):
+    meta = {k: v for k, v in req.model_dump(exclude={"body", "reviewed"}).items() if v is not None}
+    return _leaflet_call(leaflets.update_draft, version_id, meta, req.body, req.reviewed)
+
+
+@app.delete("/admin/leaflets/drafts/{version_id}")
+async def admin_discard_draft(version_id: int, user: dict = Depends(admin_user)):
+    _leaflet_call(leaflets.discard_draft, version_id, user["account"])
+    return {"discarded": version_id}
+
+
+@app.post("/admin/leaflets/drafts/{version_id}/publish")
+async def admin_publish_leaflet(version_id: int, req: LeafletAction, user: dict = Depends(admin_user)):
+    """上架並同步向量索引（約數秒）：下一則病人提問就用新版。"""
+    import asyncio
+    return await asyncio.to_thread(_leaflet_call, leaflets.publish, version_id, user["account"],
+                                   req.reviewed, req.note)
+
+
+@app.post("/admin/leaflets/{dept}/{code}/retire")
+async def admin_retire_leaflet(dept: str, code: str, req: LeafletAction, user: dict = Depends(admin_user)):
+    import asyncio
+    return await asyncio.to_thread(_leaflet_call, leaflets.retire, dept, code, user["account"], req.note)
+
+
+@app.post("/admin/leaflets/{dept}/{code}/restore")
+async def admin_restore_leaflet(dept: str, code: str, req: LeafletAction, user: dict = Depends(admin_user)):
+    import asyncio
+    return await asyncio.to_thread(_leaflet_call, leaflets.restore, dept, code, req.version_id,
+                                   user["account"], req.note)
+
+
+@app.get("/admin/leaflets/versions/{version_id}/original")
+async def admin_leaflet_original(version_id: int, user: dict = Depends(admin_user)):
+    path, name = _leaflet_call(leaflets.original_file, version_id)
+    return FileResponse(path, filename=name)
 
 
 # ── LINE webhook（病患端）─────────────────────────────────────────

@@ -259,83 +259,102 @@ def sync_collection(col, chunks: list[Chunk], batch_size: int = 32, embed=None) 
 
 
 # ── 主流程 ────────────────────────────────────────────────────────
-def build_chunks() -> tuple[list[Chunk], list[dict]]:
-    """所有科別（knowledge/*/manifest.json）的單張切段。同一份單張可被多個科別引用，各自帶科別標記。"""
+# 管理後台上架的單張（backend/leaflets.py）放在 data/leaflets/<科別>/<代碼>.md。
+# 同一代碼時優先於 source_dir 的原始單張（改版）；frontmatter rag_index: false 表示停用。
+OVERLAY_DIR = ROOT / "data" / "leaflets"
+
+
+def build_chunks(overlay_root: Path | None = OVERLAY_DIR) -> tuple[list[Chunk], list[dict]]:
+    """所有科別（knowledge/*/manifest.json）的單張切段。同一份單張可被多個科別引用，各自帶科別標記。
+    overlay_root：管理後台上架的單張；None = 只用原始單張。"""
     count_tokens = get_token_counter()
     chunks: list[Chunk] = []
     files_report: list[dict] = []
     for dept in departments.load_all().values():
-        c, r = _build_dept_chunks(dept.id, dept.source_dir, count_tokens)
+        overlay = overlay_root / dept.id if overlay_root else None
+        c, r = _build_dept_chunks(dept.id, dept.source_dir, count_tokens, overlay)
         chunks += c
         files_report += r
     return chunks, files_report
 
 
-def _build_dept_chunks(dept_id: str, source_dir: Path, count_tokens) -> tuple[list[Chunk], list[dict]]:
+def collect_documents(source_dir: Path, overlay_dir: Path | None = None) -> list[tuple[Path, dict, str, str]]:
+    """科別目前生效的單張：[(路徑, frontmatter, 內文, 來源)]，來源為 "source" 或 "overlay"。
+    以單張代碼對應：覆蓋層的同代碼單張取代原始單張；覆蓋層的新代碼直接加入。"""
+    docs: dict[str, tuple[Path, dict, str, str]] = {}
+    for origin, folder in (("source", source_dir), ("overlay", overlay_dir)):
+        if not folder or not folder.is_dir():
+            continue
+        for path in sorted(folder.glob("*.md")):
+            fm, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            code = fm.get("code") or path.stem.split()[0]
+            docs[code] = (path, fm, body, origin)
+    return list(docs.values())
+
+
+def document_chunks(dept_id: str, fm: dict, body: str, count_tokens, name: str = "") -> tuple[list[Chunk], list[str]]:
+    """一份單張切成段落。回傳 (chunks, 被排除的章節)。缺 category 時丟 ValueError。"""
+    code = fm.get("code", "")
+    topic = fm.get("topic", "")
+    category = fm.get("category", "")
+    source = fm.get("source", "")
+    doc_version = fm.get("doc_version", "")
+    if not category:
+        raise ValueError(f"{name or code} 缺 category")
+    chunks: list[Chunk] = []
+    excluded: list[str] = []
+    for sec_name, sec_body in split_sections(body):
+        if sec_name in EXCLUDED_SECTIONS:
+            excluded.append(sec_name)
+            continue
+        prefix = f"【{topic}｜{sec_name}】\n"
+        # fits() 判斷的是「加上前綴後」的完整 embed_text，前綴本身也佔 token
+        budget = MODEL_MAX_TOKENS - count_tokens(prefix)
+        if budget < MIN_CHUNK // 2:
+            raise ValueError(f"{name or code} 的章節標題「{sec_name}」過長，前綴就吃掉 "
+                             f"{count_tokens(prefix)}/{MODEL_MAX_TOKENS} tokens")
+        fits = lambda t, b=budget: count_tokens(t) <= b
+        for i, text in enumerate(chunk_section(sec_name, sec_body, fits)):
+            # ID 含版本：單張改版（即使文字未變）也會換新 ID，舊版由 sync_collection 刪除
+            cid = hashlib.md5(
+                f"{dept_id}|{code}|{doc_version}|{sec_name}|{i}|{text}".encode("utf-8")
+            ).hexdigest()
+            # 前置 topic 與章節名，讓嵌入向量帶有主題語境
+            chunks.append(Chunk(id=cid, text=prefix + text, code=code, topic=topic,
+                                category=category, section=sec_name, source=source,
+                                doc_version=doc_version, dept=dept_id))
+    return chunks, excluded
+
+
+def _build_dept_chunks(dept_id: str, source_dir: Path, count_tokens,
+                       overlay_dir: Path | None = None) -> tuple[list[Chunk], list[dict]]:
     chunks: list[Chunk] = []
     files_report: list[dict] = []
 
-    md_files = sorted(source_dir.glob("*.md"))
-    if not md_files:
+    if not any(source_dir.glob("*.md")):
         sys.exit(f"科別 {dept_id} 找不到任何 .md：{source_dir}")
 
-    for path in md_files:
-        raw = path.read_text(encoding="utf-8")
-        fm, body = parse_frontmatter(raw)
-
+    for path, fm, body, origin in collect_documents(source_dir, overlay_dir):
+        fm.setdefault("code", path.stem.split()[0])
         if not fm.get("rag_index", False):
-            files_report.append({"file": path.name, "chunks": 0, "skipped": "rag_index 非 true"})
+            files_report.append({"file": path.name, "dept": dept_id, "code": fm["code"], "chunks": 0,
+                                 "origin": origin, "skipped": "rag_index 非 true"})
             continue
-
-        code = fm.get("code", path.stem.split()[0])
-        topic = fm.get("topic", "")
-        category = fm.get("category", "")
-        source = fm.get("source", "")
-        doc_version = fm.get("doc_version", "")
-
-        if not category:
-            sys.exit(f"{path.name} 缺 category —— 拒絕索引，請先補 frontmatter")
-
-        n_before = len(chunks)
-        excluded_hits: list[str] = []
-
-        for sec_name, sec_body in split_sections(body):
-            if sec_name in EXCLUDED_SECTIONS:
-                excluded_hits.append(sec_name)
-                continue
-
-            prefix = f"【{topic}｜{sec_name}】\n"
-            # fits() 判斷的是「加上前綴後」的完整 embed_text，前綴本身也佔 token
-            budget = MODEL_MAX_TOKENS - count_tokens(prefix)
-            if budget < MIN_CHUNK // 2:
-                sys.exit(f"{path.name} 的章節標題「{sec_name}」過長，前綴就吃掉 "
-                         f"{count_tokens(prefix)}/{MODEL_MAX_TOKENS} tokens")
-            fits = lambda t, b=budget: count_tokens(t) <= b
-
-            for i, text in enumerate(chunk_section(sec_name, sec_body, fits)):
-                # 前置 topic 與章節名，讓嵌入向量帶有主題語境
-                embed_text = prefix + text
-                # ID 含版本：單張改版（即使文字未變）也會換新 ID，舊版由 sync_collection 刪除
-                cid = hashlib.md5(
-                    f"{dept_id}|{code}|{doc_version}|{sec_name}|{i}|{text}".encode("utf-8")
-                ).hexdigest()
-                chunks.append(
-                    Chunk(
-                        id=cid, text=embed_text, code=code, topic=topic,
-                        category=category, section=sec_name,
-                        source=source, doc_version=doc_version, dept=dept_id,
-                    )
-                )
-
-        if len(chunks) == n_before:
+        try:
+            c, excluded_hits = document_chunks(dept_id, fm, body, count_tokens, path.name)
+        except ValueError as e:
+            sys.exit(f"{e} —— 拒絕索引，請先補 frontmatter")
+        if not c:
             print(f"  ⚠ {dept_id}／{path.name}：rag_index 為 true 卻沒有切出任何段落，請檢查章節格式（## 標題）")
+        chunks += c
         files_report.append({
             "file": path.name,
             "dept": dept_id,
-            "code": code,
-            "topic": topic,
-            "category": category,
-            "chunks": len(chunks) - n_before,
+            "code": fm["code"],
+            "topic": fm.get("topic", ""),
+            "category": fm.get("category", ""),
+            "chunks": len(c),
+            "origin": origin,
             "excluded_sections": excluded_hits,
         })
 

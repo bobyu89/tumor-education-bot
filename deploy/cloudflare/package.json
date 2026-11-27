@@ -1,0 +1,11 @@
+{
+  "name": "tumor-education-bot-cloudflare",
+  "private": true,
+  "description": "腫瘤衛教機器人：Cloudflare Containers 測試部署（說明見 docs/deploy/Cloudflare測試部署.md）",
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.161.0"
+  }
+}

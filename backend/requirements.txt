@@ -22,4 +22,5 @@ pydantic-settings>=2.3
 # ── 索引器（scripts/）──
 pymupdf>=1.24               # PDF 讀取
 python-docx>=1.1            # DOCX 讀取
+pypdf>=5.0                  # 單張管理後台：讀取上傳的 PDF
 langchain-text-splitters>=0.2

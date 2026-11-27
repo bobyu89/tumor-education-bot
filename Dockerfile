@@ -30,6 +30,16 @@ COPY knowledge/ knowledge/
 COPY Obsidian_Vault/衛教知識庫/ Obsidian_Vault/衛教知識庫/
 COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
 
+# BAKE_MODELS=1：建置時就下載嵌入模型並建立向量索引（Cloudflare Containers 用：每次喚醒都是全新硬碟，
+# 不能每次啟動都下載 0.9 GB）。一般 Docker 部署維持 0，模型與索引放在 volume、首次啟動才下載。
+ARG BAKE_MODELS=0
+RUN --mount=type=secret,id=ca_bundle,required=false \
+    if [ "$BAKE_MODELS" = "1" ]; then \
+      if [ -f /run/secrets/ca_bundle ]; then export SSL_CERT_FILE=/run/secrets/ca_bundle; fi; \
+      python -X utf8 scripts/index_vault.py && \
+      python -X utf8 -c "import sys; sys.path.insert(0, 'backend'); import embedding; embedding.make_embedding_function(embedding.REDFLAG_MODEL)"; \
+    fi
+
 # 以非 root 身分執行；volume 掛載點先建好並交給 app 使用者
 RUN useradd --create-home --uid 10001 app \
  && mkdir -p data chroma_db models Obsidian_Vault/專案管理 \

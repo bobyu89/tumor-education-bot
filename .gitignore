@@ -53,3 +53,7 @@ backend/retrieval_eval_results.json
 
 # Claude 實測的逐題輸出（scripts/live_llm_eval.py）
 eval_results/
+
+# Cloudflare 部署工具（npm）
+deploy/cloudflare/node_modules/
+deploy/cloudflare/.wrangler/

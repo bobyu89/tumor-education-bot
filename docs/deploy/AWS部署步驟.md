@@ -85,9 +85,9 @@ sudo bash /opt/tumor-bot/install.sh
 | 改設定（換金鑰、改模型） | `sudo nano /opt/tumor-bot/app/.env`，改完再執行一次 install.sh |
 | 首次登入後清掉管理者密碼 | 在 `.env` 把 `ADMIN_PASSWORD=` 後面清空（帳號已建立，不影響登入） |
 
-**衛教單張改版**：改好單張並推到 GitHub 後，在主機執行 install.sh，啟動時會自動同步索引。
+**衛教單張改版**：用管理者帳號登入 →「📚 單張管理」上傳 Word／PDF，預覽後上架，立即生效（見 `docs/knowledge/單張管理後台.md`）。
 
-**備份**：病人資料在主機硬碟的 Docker volume 裡。建議在 EC2 主控台 → **生命週期管理員（Data Lifecycle Manager）**
+**備份**：病人資料與後台上架的單張（`data/leaflets/`）都在主機硬碟的 Docker volume 裡。建議在 EC2 主控台 → **生命週期管理員（Data Lifecycle Manager）**
 建立每日快照規則，目標選標籤 `Name = tumor-bot-data` 的硬碟，保留 7 份。
 
 ## 停止與刪除

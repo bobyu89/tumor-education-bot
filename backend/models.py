@@ -1,7 +1,7 @@
 """
 Pydantic 資料模型定義
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
@@ -26,6 +26,36 @@ class LoginRequest(BaseModel):
 # —— 先前可以在 body 填任何代號冒用他人（資安審查 S3）。多送的欄位會被忽略。
 class ChatRequest(BaseModel):
     message: str
+
+
+class LeafletUpload(BaseModel):
+    """管理者上傳單張。檔案以 base64 放在 JSON 裡（不需 multipart 套件）；欄位留空時沿用檔案或目前版本的值。"""
+    dept: str
+    filename: str = Field(max_length=200)
+    content_b64: str = Field(max_length=15_000_000)
+    code: str = ""
+    title: str = ""
+    topic: str = ""
+    category: str = ""
+    doc_version: str = ""
+    source: str = ""
+
+
+class LeafletDraftUpdate(BaseModel):
+    code: Optional[str] = None
+    title: Optional[str] = None
+    topic: Optional[str] = None
+    category: Optional[str] = None
+    doc_version: Optional[str] = None
+    source: Optional[str] = None
+    body: Optional[str] = Field(default=None, max_length=500_000)
+    reviewed: Optional[bool] = None
+
+
+class LeafletAction(BaseModel):
+    reviewed: bool = False
+    note: str = Field(default="", max_length=500)
+    version_id: Optional[int] = None   # 退回：指定版本；None = 院內原始版
 
 
 class QuizSubmit(BaseModel):
