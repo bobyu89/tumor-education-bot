@@ -20,7 +20,7 @@ TONE_TEMPLATES = {
 - 可用生活化的比喻幫助理解，但比喻不能增加衛教資料沒有的醫學內容
 - 絕對不用英文縮寫
 - 句子不超過 20 個字
-- 最後加一句鼓勵的話（「何時要就醫」的提醒不算在 1-2 個重點內）
+- 最後加一句鼓勵的話：只能是情緒上的鼓勵，不得包含任何醫療或衛教內容（「何時要就醫」的提醒不算在 1-2 個重點內）
 """,
     "general": """
 你是一位專業友善的衛教護理師。
@@ -28,7 +28,7 @@ TONE_TEMPLATES = {
 - 用口語化中文，適當解釋醫學術語
 - 回應 3-5 個重點
 - 可使用條列式說明
-- 結尾提供 1 個可執行的建議
+- 結尾提供 1 個可執行的建議，必須取自上方衛教資料；資料沒有合適的就省略
 - 如有需要可詢問澄清問題
 """,
     "detailed": """
@@ -65,18 +65,60 @@ def safety_boundary(channel: str = "web", emergency_contact: str | None = None) 
 # 無法回答時輸出固定標記，由 quality.classify 偵測、chat_service 改成固定轉介文字（不由模型自行措辭）。
 UNANSWERABLE_MARK = "[無法回答]"
 
-def grounding_rules(example_code: str = "單張代碼") -> str:
-    """回答規則。引用範例用這次實際提供的單張代碼（不寫死科別代碼格式）。"""
+def grounding_rules(example_code: str = "單張代碼", full_kb: bool = False) -> str:
+    """回答規則。引用範例用這次實際提供的單張代碼（不寫死科別代碼格式）。
+    full_kb：CAG 模式（提供整個科別的單張），要求只引用真正用到的單張。"""
+    cag_rule = ("6. 上方是本科全部的衛教單張。先找出和病人問題真正相關的單張與段落，只依據它們回答、"
+                "只標註真正用到的單張代碼；和問題無關的單張不要提。\n") if full_kb else ""
     return f"""── 回答規則（必須遵守） ──
 1. 只能使用上方「衛教知識庫內容」回答。資料沒有寫到的，不要自行補充，
    包括一般醫學常識、藥物名稱、劑量、檢驗數值或其他醫院的做法。
 2. 每一項建議後面，用括號標註出處的單張代碼，例如（{example_code}）。
 3. 如果上方資料無法回答病人的問題，只輸出 {UNANSWERABLE_MARK}，不要輸出任何其他文字。
 4. 如果上方資料中有「何時通知醫護人員」或「需要就醫」的內容，而且和病人的問題有關，在回答最後提醒病人。
-"""
+5. 不要改寫、增減資料中的數值、頻率、時間與修飾詞（例如低／高、多／少、至少、超過、每天），保持原文用詞；
+   原文語意不清楚時，照原文寫，不要自行補字解釋。
+{cag_rule}"""
 
 
 # ── 主函式 ──────────────────────────────────────────
+
+def _tone_and_patient(profile: "PatientProfile | None") -> tuple[str, str]:
+    """語氣模板與病患資訊。年齡 >= 65 且非 detailed 時自動降級為 simple。"""
+    if profile is None:
+        return TONE_TEMPLATES["general"], "（病患資料未提供，以一般成人為對象）"
+    if profile.age and profile.age >= 65 and profile.education_level != "detailed":
+        tone_key = "simple"
+    else:
+        tone_key = profile.education_level
+    return TONE_TEMPLATES.get(tone_key, TONE_TEMPLATES["general"]), _format_patient_info(profile)
+
+
+def build_system_blocks(
+    profile: "PatientProfile | None",
+    kb_docs: list[dict],
+    output_format: str = "text",
+    channel: str = "web",
+    emergency_contact: str | None = None,
+) -> list[str]:
+    """CAG 模式的 system prompt，分成兩段：
+      [0] 固定前段：安全規則 + 本科全部單張 + 回答規則 —— 同科別、同管道的每一則提問都相同，送 API 時快取
+      [1] 變動後段：語氣、病患資訊、輸出格式
+    安全規則仍在最前面。"""
+    tone_instruction, patient_info = _tone_and_patient(profile)
+    prefix = f"""{safety_boundary(channel, emergency_contact)}
+── 衛教知識庫內容（本科全部衛教單張；你只能根據以下資料回答） ──
+{_format_kb(kb_docs)}
+
+{grounding_rules(_example_code(kb_docs), full_kb=True)}"""
+    tail = f"""{tone_instruction}
+── 病患資訊 ──
+{patient_info}
+
+── 輸出格式要求 ──
+{_get_format_instruction(output_format)}"""
+    return [prefix.strip(), tail.strip()]
+
 
 def build_prompt(
     profile: "PatientProfile | None",
@@ -87,18 +129,7 @@ def build_prompt(
 ) -> str:
 
     # 1. 選擇語氣
-    if profile is None:
-        tone_key = "general"
-        patient_info = "（病患資料未提供，以一般成人為對象）"
-    else:
-        # 年齡 >= 65 且非 detailed，自動降級為 simple
-        if profile.age and profile.age >= 65 and profile.education_level != "detailed":
-            tone_key = "simple"
-        else:
-            tone_key = profile.education_level
-        patient_info = _format_patient_info(profile)
-
-    tone_instruction = TONE_TEMPLATES.get(tone_key, TONE_TEMPLATES["general"])
+    tone_instruction, patient_info = _tone_and_patient(profile)
 
     # 2. 組裝 RAG context
     rag_context = _format_rag_context(rag_docs)
@@ -153,6 +184,20 @@ def _format_rag_context(docs: list[dict]) -> str:
         score = doc.get("score", 0)
         sections.append(f"[資料{i}｜來源：{source}｜相關度：{score}]\n{content}")
     return "\n\n".join(sections)
+
+
+def _format_kb(docs: list[dict]) -> str:
+    """CAG：依單張分組，每份單張列出代碼、主題、版本與各章節全文。"""
+    if not docs:
+        return "（無衛教資料）"
+    blocks, current = [], None
+    for d in docs:
+        if d["code"] != current:
+            current = d["code"]
+            ver = f"，版本 {d['doc_version']}" if d.get("doc_version") else ""
+            blocks.append(f"\n【單張 {d['code']}：{d.get('topic', '')}{ver}】")
+        blocks.append(f"〔{d.get('section', '')}〕\n{d['content']}")
+    return "\n".join(blocks).strip()
 
 
 def _get_format_instruction(output_format: str) -> str:

@@ -2,6 +2,7 @@
 Claude 實測：用真的 Anthropic API 跑一輪衛教問答，檢查正式串接的行為與費用。
 
 走正式路徑：rag.query → prompt.build_prompt → llm_client.ClaudeClient.generate → quality.classify
+--kb cag 時改走 kb.full_docs → prompt.build_system_blocks（本科全部單張，固定前段用 prompt caching）
 （不經過資料庫與紅旗層；紅旗攔截在呼叫 LLM 之前，已由 test_redflag.py 涵蓋）。
 
 題目
@@ -19,6 +20,7 @@ Claude 實測：用真的 Anthropic API 跑一輪衛教問答，檢查正式串�
   python -X utf8 scripts/live_llm_eval.py --dry-run          # 不呼叫 API：只組 prompt、估計費用
   python -X utf8 scripts/live_llm_eval.py --limit 5          # 先小量試跑
   python -X utf8 scripts/live_llm_eval.py                    # 全部（Sonnet 5.5 + Opus 5.5 + 評審）
+  python -X utf8 scripts/live_llm_eval.py --models claude-sonnet-5-5 --kb rag cag   # 比較 RAG 與 CAG
 輸出：eval_results/llm_live_<時間>.jsonl（逐題完整回答）與 .md（摘要與人工審閱清單）
 """
 from __future__ import annotations
@@ -40,11 +42,16 @@ EVAL = json.loads((ROOT / "backend" / "retrieval_eval.json").read_text(encoding=
 DEPT = "hemato-oncology"
 OUT_DIR = ROOT / "eval_results"
 
-# 每百萬 token 的美元價格（Anthropic 官方定價，2026-11）
+# 每百萬 token 的美元價格（Anthropic 官方定價，2026-11）。快取寫入：5 分鐘 1.25 倍、1 小時 2 倍（CACHE_TTL）
 PRICES = {
     "claude-sonnet-5-5": {"in": 2.0, "out": 10.0, "cache_read": 0.10},
     "claude-opus-5-5": {"in": 4.0, "out": 20.0, "cache_read": 0.20},
 }
+
+
+def _write_mult() -> float:
+    from config import settings
+    return 2.0 if settings.CACHE_TTL == "1h" else 1.25
 JUDGE_MODEL = "claude-opus-5-5"
 
 BOUNDARY = [
@@ -82,12 +89,25 @@ def load_pipeline():
     return rag.retriever, build_prompt, quality, ClaudeClient
 
 
+def kb_docs(ctx: dict, q: str, mode: str) -> list[dict]:
+    import kb
+    return kb.full_docs(DEPT) if mode == "cag" else ctx["retriever"].query(q, dept=DEPT)
+
+
+def kb_system(ctx: dict, docs: list[dict], mode: str):
+    from prompt import build_system_blocks
+    if mode == "cag":
+        return build_system_blocks(None, docs, channel=ctx["channel"])
+    return ctx["build_prompt"](None, docs, channel=ctx["channel"])
+
+
 def cost_of(model: str, usage: dict) -> float | None:
     p = PRICES.get(model)
     if not p:
         return None
     return (usage.get("input_tokens", 0) * p["in"] + usage.get("output_tokens", 0) * p["out"]
-            + usage.get("cache_read_input_tokens", 0) * p["cache_read"]) / 1e6
+            + usage.get("cache_read_input_tokens", 0) * p["cache_read"]
+            + usage.get("cache_creation_input_tokens", 0) * p["in"] * _write_mult()) / 1e6
 
 
 def build_items(limit: int | None) -> list[dict]:
@@ -99,13 +119,13 @@ def build_items(limit: int | None) -> list[dict]:
             + [{"kind": "boundary", "q": q, "ok": []} for q in bnd])
 
 
-def run_one(item: dict, model: str, ctx: dict) -> dict:
-    retriever, build_prompt, quality, client = ctx["retriever"], ctx["build_prompt"], ctx["quality"], ctx["client"]
-    docs = retriever.query(item["q"], dept=DEPT)
-    rec = {**item, "model": model, "provided": sorted({d["code"] for d in docs})}
+def run_one(item: dict, model: str, ctx: dict, mode: str = "rag") -> dict:
+    quality, client = ctx["quality"], ctx["client"]
+    docs = kb_docs(ctx, item["q"], mode)
+    rec = {**item, "model": model, "kb": mode, "provided": sorted({d["code"] for d in docs})}
     if not quality.pre_check(docs):
         return {**rec, "label": "deflected_no_source", "reply": ""}
-    system = build_prompt(None, docs, channel=ctx["channel"])
+    system = kb_system(ctx, docs, mode)
     t0 = time.perf_counter()
     try:
         req = client.build_request(system, [], item["q"], model)
@@ -117,24 +137,45 @@ def run_one(item: dict, model: str, ctx: dict) -> dict:
     result = client.parse_response(resp, model)
     usage = {k: getattr(resp.usage, k, 0) or 0
              for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}
-    fallback = any(getattr(it, "type", "") == "fallback_message" for it in (getattr(resp.usage, "iterations", None) or []))
+    iterations = getattr(resp.usage, "iterations", None) or []
+    fallback = any(getattr(it, "type", "") == "fallback_message" for it in iterations)
+    details = getattr(resp, "stop_details", None)
+    refusal = None if resp.stop_reason != "refusal" else {
+        "category": getattr(details, "category", None),
+        "explanation": getattr(details, "explanation", None),
+        "recommended_model": getattr(details, "recommended_model", None),
+        "iterations": [getattr(it, "type", "") for it in iterations],
+        "request_id": getattr(resp, "_request_id", None),
+    }
     label = "llm_refusal" if result.refused or not result.text.strip() else \
         quality.classify(result.text, docs, ctx["known"])
     return {**rec, "label": label, "reply": result.text, "served_by": result.model_id, "fallback": fallback,
+            "refusal": refusal,
             "stop_reason": resp.stop_reason, "latency_s": round(latency, 2), "usage": usage,
             "cost": cost_of(result.model_id if result.model_id in PRICES else model, usage),
             "cited": sorted(quality.cited_codes(result.text, ctx["known"])),
-            "context": [{"code": d["code"], "section": d["section"], "content": d["content"]} for d in docs]}
+            # CAG 的 context 是整科單張，不逐題存（評審改用快取的全文）
+            "context": [] if mode == "cag" else
+            [{"code": d["code"], "section": d["section"], "content": d["content"]} for d in docs]}
 
 
-def judge_one(rec: dict, client) -> dict:
-    ctx = "\n\n".join(f"[{d['code']}｜{d['section']}]\n{d['content']}" for d in rec["context"])
+def judge_one(rec: dict, client, kb_text: str = "") -> dict:
+    qa = f"## 病人問題\n{rec['q']}\n\n## 機器人的回答\n{rec['reply']}"
+    if rec.get("kb") == "cag":
+        # 整科單張放在 system 並快取：每題評審只付快取讀取的費用
+        system = [{"type": "text", "text": f"{JUDGE_SYSTEM}\n\n## 單張段落（本科全部單張）\n{kb_text}",
+                   "cache_control": {"type": "ephemeral"}}]
+        content = qa
+    else:
+        ctx = "\n\n".join(f"[{d['code']}｜{d['section']}]\n{d['content']}" for d in rec["context"])
+        system, content = JUDGE_SYSTEM, f"## 單張段落\n{ctx}\n\n{qa}"
     resp = client.client.messages.create(
-        model=JUDGE_MODEL, max_tokens=4000, system=JUDGE_SYSTEM,
+        model=JUDGE_MODEL, max_tokens=4000, system=system,
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": JUDGE_SCHEMA}},
-        messages=[{"role": "user", "content": f"## 單張段落\n{ctx}\n\n## 病人問題\n{rec['q']}\n\n## 機器人的回答\n{rec['reply']}"}],
+        messages=[{"role": "user", "content": content}],
     )
-    usage = {"input_tokens": resp.usage.input_tokens, "output_tokens": resp.usage.output_tokens}
+    usage = {k: getattr(resp.usage, k, 0) or 0
+             for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}
     if resp.stop_reason == "refusal":
         return {"verdict": "judge_refused", "unsupported_claims": [], "cost": cost_of(JUDGE_MODEL, usage)}
     out = json.loads(next(b.text for b in resp.content if b.type == "text"))
@@ -143,8 +184,8 @@ def judge_one(rec: dict, client) -> dict:
 
 def summarize(rows: list[dict], models: list[str]) -> list[str]:
     lines = []
-    for m in models:
-        rs = [r for r in rows if r["model"] == m]
+    for m, k in dict.fromkeys((r["model"], r.get("kb", "rag")) for r in rows if r["model"] in models):
+        rs = [r for r in rows if r["model"] == m and r.get("kb", "rag") == k]
         ins = [r for r in rs if r["kind"] == "in_scope"]
         oos = [r for r in rs if r["kind"] == "out_of_scope"]
         answered = [r for r in ins if r["label"] in ("grounded", "uncited", "citation_mismatch")]
@@ -153,12 +194,13 @@ def summarize(rows: list[dict], models: list[str]) -> list[str]:
         lat = sorted(r["latency_s"] for r in rs if "latency_s" in r)
         judged = [r for r in ins if "judge" in r]
         lines += [
-            f"### {m}",
+            f"### {m}｜{k.upper()}",
             f"| 指標 | 結果 |", "|---|---|",
             f"| 範圍內：依據單張回答並引用（grounded） | {sum(r['label'] == 'grounded' for r in ins)}/{len(ins)} |",
             f"| 範圍內：引用到目標單張 | {sum(any(c in r['ok'] for c in r.get('cited', [])) for r in ins)}/{len(ins)} |",
             f"| 範圍內：誤判為無法回答 | {sum(r['label'].startswith('deflected') for r in ins)}/{len(ins)} |",
             f"| 範圍內：沒有引用代碼 | {sum(r['label'] == 'uncited' for r in ins)}/{len(ins)} |",
+            f"| 範圍內：只給緊急指引（safety_escalation） | {sum(r['label'] == 'safety_escalation' for r in ins)}/{len(ins)} |",
             f"| 範圍內：引用了沒提供的代碼 | {sum(r['label'] == 'citation_mismatch' for r in ins)}/{len(ins)} |",
             f"| 範圍外：正確轉介 | {sum(r['label'].startswith('deflected') or r['label'] == 'llm_refusal' for r in oos)}/{len(oos)} |",
             f"| 拒答（整條鏈）／改由備援模型回答 | {sum(r['label'] == 'llm_refusal' for r in rs)}／{sum(bool(r.get('fallback')) for r in rs)} |",
@@ -171,6 +213,9 @@ def summarize(rows: list[dict], models: list[str]) -> list[str]:
         if lat:
             lines.append(f"| 回應時間 中位數／最慢 | {lat[len(lat) // 2]:.1f} 秒／{lat[-1]:.1f} 秒 |")
         lines.append(f"| 費用（不含評審） | ${cost:.3f}，平均每題 ${cost / max(len(rs), 1):.4f} |")
+        reads = [r["usage"].get("cache_read_input_tokens", 0) for r in rs if "usage" in r]
+        if any(reads):
+            lines.append(f"| 快取命中（讀取快取的題數） | {sum(x > 0 for x in reads)}/{len(reads)} |")
         lines.append("")
         del answered, n
     return lines
@@ -187,17 +232,19 @@ def review_list(rows: list[dict]) -> list[str]:
             why.append("範圍外問題卻作答")
         if r["kind"] == "boundary":
             why.append("邊界題（應建議與醫療團隊討論）")
-        if r["label"] in ("citation_mismatch", "uncited", "llm_refusal", "llm_error"):
+        if r["label"] in ("citation_mismatch", "uncited", "llm_refusal", "llm_error", "safety_escalation"):
             why.append(r["label"])
         if why:
             reply = (r.get("reply") or r.get("error") or "（無回答）").replace("\n", "<br>")
-            out.append(f"- **[{r['model']}] {r['q']}**（{'、'.join(why)}）<br>{reply}")
+            out.append(f"- **[{r['model']}｜{r.get('kb', 'rag').upper()}] {r['q']}**（{'、'.join(why)}）<br>{reply}")
     return out
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--models", nargs="+", default=["claude-sonnet-5-5", "claude-opus-5-5"])
+    ap.add_argument("--kb", nargs="+", default=["rag"], choices=["rag", "cag"],
+                    help="知識庫交給模型的方式；給兩個就兩種都跑（比較用）")
     ap.add_argument("--limit", type=int, help="每類只跑前 N 題（試跑用）")
     ap.add_argument("--channel", default="line", choices=["line", "web"])
     ap.add_argument("--effort", help="覆寫 LLM_EFFORT（預設依 .env，通常 low）")
@@ -214,18 +261,25 @@ def main():
     items = build_items(args.limit)
 
     if args.dry_run:
-        chars = []
-        for it in items:
-            docs = retriever.query(it["q"], dept=DEPT)
-            chars.append(len(build_prompt(None, docs, channel=args.channel)) + len(it["q"]) if docs else 0)
-        est_in = sum(chars) / 1.1   # 中文約 1.1 字／token（粗估）
-        print(f"題數 {len(items)} × 模型 {len(args.models)}；平均 prompt {sum(chars) / len(chars):.0f} 字")
-        for m in args.models:
-            p = PRICES[m]
-            est = (est_in * p["in"] + len(items) * 600 * p["out"]) / 1e6
-            print(f"  {m}: 約 ${est:.2f}（假設每題輸出含思考約 600 token）")
-        if not args.no_judge:
-            print(f"  評審 {JUDGE_MODEL}: 約 ${len(args.models) * len(items) * (est_in / len(items) * 4 + 300 * 20) / 1e6:.2f}")
+        dctx = {"retriever": retriever, "build_prompt": build_prompt, "channel": args.channel}
+        for k in args.kb:
+            chars = []
+            for it in items:
+                docs = kb_docs(dctx, it["q"], k)
+                system = kb_system(dctx, docs, k) if docs else ""
+                chars.append(sum(map(len, system)) if isinstance(system, list) else len(system))
+            per_q = sum(chars) / len(chars) / 1.1   # 中文約 1.1 字／token（粗估）
+            print(f"[{k.upper()}] 題數 {len(items)}；平均 prompt {sum(chars) / len(chars):.0f} 字（約 {per_q:.0f} token）")
+            for m in args.models:
+                p = PRICES[m]
+                # CAG：第一題寫快取（1.25 倍），之後讀快取（約 1/10）
+                inp = (per_q * p["in"] * _write_mult() + (len(items) - 1) * per_q * p["cache_read"]) if k == "cag" \
+                    else len(items) * per_q * p["in"]
+                est = (inp + len(items) * 600 * p["out"]) / 1e6
+                print(f"  {m}: 約 ${est:.2f}（假設每題輸出含思考約 600 token）")
+            if not args.no_judge:
+                jin = (per_q * 5.0 + len(items) * per_q * 0.2) if k == "cag" else len(items) * per_q * 4
+                print(f"  評審 {JUDGE_MODEL}: 約 ${len(args.models) * (jin + len(items) * 300 * 20) / 1e6:.2f}")
         return
 
     if not (settings.ANTHROPIC_API_KEY or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
@@ -235,17 +289,32 @@ def main():
            "client": ClaudeClient(), "known": retriever.known_codes(), "channel": args.channel}
     rows = []
     for m in args.models:
-        print(f"=== {m}（{len(items)} 題，effort={settings.LLM_EFFORT}）===")
-        with ThreadPoolExecutor(args.workers) as ex:
-            for r in ex.map(lambda it: run_one(it, m, ctx), items):
-                rows.append(r)
-                print(f"  {r['label']:22s} {r.get('latency_s', '-')!s:>5}s  {r['q'][:28]}")
+        for k in args.kb:
+            print(f"=== {m}｜{k.upper()}（{len(items)} 題，effort={settings.LLM_EFFORT}）===")
+            if k == "cag":   # 先跑一題寫入快取，其餘題目才讀得到（並行同時送出會各自寫快取）
+                first = run_one(items[0], m, ctx, k)
+                rows.append(first)
+                print(f"  {first['label']:22s} {first.get('latency_s', '-')!s:>5}s  {first['q'][:28]}")
+                rest = items[1:]
+            else:
+                rest = items
+            with ThreadPoolExecutor(args.workers) as ex:
+                for r in ex.map(lambda it: run_one(it, m, ctx, k), rest):
+                    rows.append(r)
+                    print(f"  {r['label']:22s} {r.get('latency_s', '-')!s:>5}s  {r['q'][:28]}")
 
     if not args.no_judge:
+        import kb
+        from prompt import _format_kb
+        kb_text = _format_kb(kb.full_docs(DEPT))
         todo = [r for r in rows if r["kind"] != "out_of_scope" and r["label"] in ("grounded", "uncited", "citation_mismatch")]
         print(f"=== 評審（{JUDGE_MODEL}，{len(todo)} 題）===")
+        cag_todo = [r for r in todo if r.get("kb") == "cag"]
+        if cag_todo:   # 同樣先評一題寫入快取
+            cag_todo[0]["judge"] = judge_one(cag_todo[0], ctx["client"], kb_text)
+        pending = [r for r in todo if "judge" not in r]
         with ThreadPoolExecutor(args.workers) as ex:
-            for r, j in zip(todo, ex.map(lambda r: judge_one(r, ctx["client"]), todo)):
+            for r, j in zip(pending, ex.map(lambda r: judge_one(r, ctx["client"], kb_text), pending)):
                 r["judge"] = j
 
     OUT_DIR.mkdir(exist_ok=True)
@@ -256,6 +325,7 @@ def main():
     md = [f"# Claude 實測結果（{stamp}）", "",
           f"題目：範圍內 {sum(i['kind'] == 'in_scope' for i in items)}、範圍外 {sum(i['kind'] == 'out_of_scope' for i in items)}、"
           f"邊界 {sum(i['kind'] == 'boundary' for i in items)}；管道 {args.channel}；effort {settings.LLM_EFFORT}；"
+          f"知識庫 {'／'.join(k.upper() for k in args.kb)}；"
           f"評審費用 ${judge_cost:.3f}", "", *summarize(rows, args.models),
           "## 需要人工審閱", "", *(review_list(rows) or ["（沒有）"])]
     (OUT_DIR / f"llm_live_{stamp}.md").write_text("\n".join(md) + "\n", encoding="utf-8")

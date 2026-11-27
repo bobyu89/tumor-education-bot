@@ -20,7 +20,8 @@ from db import get_conn
 EXPORT_TABLES = {
     "symptom_scores": ["patient_code", "esas_symptom", "score", "extra", "ts", "source"],
     "messages": ["patient_code", "role", "redflag_level", "answer_quality",
-                 "model_id", "provider", "rag_doc_versions", "ts", "content"],
+                 "model_id", "provider", "rag_doc_versions", "prompt_tokens", "completion_tokens",
+                 "cache_read_tokens", "cache_write_tokens", "refusal_category", "ts", "content"],
     "alerts": ["patient_code", "trigger", "level", "ts"],
     "comprehension_checks": ["patient_code", "onc_code", "rating", "ts"],
 }
