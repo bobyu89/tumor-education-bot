@@ -153,3 +153,12 @@
 - **快取一直是熱的**（命中 99/99），CAG 的費用與速度代表流量密集的情況；正式收案、流量稀疏時，費用會更高（見結論第 4 點）。
 - 沒有病患資料（不測 `simple`／`detailed` 語氣），只測 `line` 管道與 `effort=low`，也不經紅旗層。
 - 費用用腳本的定價表估算，實際帳單以 Console 為準。
+
+## 後續處理（2026-11-27，PR #4）
+
+| 建議 | 處理 |
+|---|---|
+| 採用 auto | `KB_MODE` 預設改為 `auto`：Anthropic Claude 且本科單張總字數 ≤ `CAG_MAX_CHARS`（60,000 字）時用 CAG，否則 RAG；演示模式（mock）一律 RAG |
+| K1：快取 TTL | `CACHE_TTL` 預設 `1h`（寫入 2 倍價，讀取 Sonnet 5.5 為 0.05 倍）。依 Claude 文件，提問間隔 5–60 分鐘時 1 小時 TTL 才划算，符合門診病人零星提問的型態；若收案後發現提問間隔多在 5 分鐘內，改回 `5m` 較便宜 |
+| K2：監控 | `messages` 新增 `cache_read_tokens`、`cache_write_tokens`、`refusal_category`（schema v7），研究匯出 CSV 一併輸出，可每週計算快取命中率、實際每題費用與拒答率 |
+| S1：拒答 | 依 Claude 文件，備援模型忙碌或不適用時，server-side fallback 不會接手，改在 `stop_details.recommended_model` 建議重試的模型。`ClaudeClient` 現在遇到拒答且有建議模型時，照建議直接重試一次（IRB 單一模型模式 `ANTHROPIC_REFUSAL_FALLBACK=false` 時不重試），並記錄拒答類別。實測腳本也記錄 `stop_details` 與 `usage.iterations`，供重現時判斷原因 |

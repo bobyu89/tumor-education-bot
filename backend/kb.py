@@ -4,7 +4,8 @@
 KB_MODE（config）：
   rag   每題檢索 RAG_TOP_K 段（rag.py）
   cag   每題提供本科全部單張（排除「參考資料」「護理指導評值」），固定前段由 Claude 快取
-  auto  本科單張總字數 ≤ CAG_MAX_CHARS 用 cag，否則 rag（單張多的科別自動退回 RAG）
+  auto  （預設）LLM 是 Anthropic Claude 且本科單張總字數 ≤ CAG_MAX_CHARS 用 cag，否則 rag
+        （單張多的科別自動退回 RAG；演示模式 mock 一律 rag）。比較結果見 docs/knowledge/RAG與CAG比較.md
 
 CAG 的單張來源與索引相同：repo 的原始單張＋管理後台上架的覆蓋層（停用的不放）。
 後台上架、停用、退回時由 leaflets.sync_index() 呼叫 invalidate()，下一題就用新版。
@@ -64,7 +65,11 @@ def total_chars(dept_id: str | None = None) -> int:
 
 
 def mode_for(dept_id: str | None = None) -> str:
+    """CAG 只用在 Anthropic Claude（靠 prompt caching 壓低費用）；演示模式（mock）只支援 RAG。"""
     mode = (settings.KB_MODE or "rag").lower()
+    provider = (settings.LLM_PROVIDER or "").lower()
+    if provider == "mock":
+        return "rag"
     if mode == "auto":
-        return "cag" if total_chars(dept_id) <= settings.CAG_MAX_CHARS else "rag"
+        return "cag" if provider == "anthropic" and total_chars(dept_id) <= settings.CAG_MAX_CHARS else "rag"
     return mode if mode in ("rag", "cag") else "rag"

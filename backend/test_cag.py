@@ -66,7 +66,8 @@ for p in od.glob("*.md"):
 kb.invalidate()
 
 print("\n=== 模式選擇 ===")
-orig_mode, orig_max = settings.KB_MODE, settings.CAG_MAX_CHARS
+orig_mode, orig_max, orig_provider = settings.KB_MODE, settings.CAG_MAX_CHARS, settings.LLM_PROVIDER
+settings.LLM_PROVIDER = "anthropic"
 settings.KB_MODE = "rag"
 check("KB_MODE=rag", kb.mode_for(DEPT) == "rag")
 settings.KB_MODE = "cag"
@@ -75,7 +76,14 @@ settings.KB_MODE = "auto"
 check("auto：單張量小用 cag", kb.mode_for(DEPT) == "cag")
 settings.CAG_MAX_CHARS = total - 1
 check("auto：超過 CAG_MAX_CHARS 退回 rag", kb.mode_for(DEPT) == "rag")
-settings.KB_MODE, settings.CAG_MAX_CHARS = orig_mode, orig_max
+settings.CAG_MAX_CHARS = orig_max
+settings.LLM_PROVIDER = "google"
+check("auto：非 Anthropic（無 prompt caching）用 rag", kb.mode_for(DEPT) == "rag")
+settings.LLM_PROVIDER = "mock"
+settings.KB_MODE = "cag"
+check("演示模式（mock）即使設 cag 也用 rag", kb.mode_for(DEPT) == "rag")
+check("預設 KB_MODE 是 auto", type(settings)().KB_MODE == "auto")
+settings.KB_MODE, settings.LLM_PROVIDER = orig_mode, orig_provider
 
 print("\n=== CAG 的 system prompt ===")
 profile = types.SimpleNamespace(age=70, education_level="general", diagnosis=["測試診斷XYZ"], medications=[])
@@ -99,7 +107,13 @@ check("RAG 的 prompt 也套用 P3", "不要改寫、增減資料中的數值" i
 print("\n=== Claude 請求（快取）===")
 c = ClaudeClient.__new__(ClaudeClient)
 req = c.build_request(blocks, [], "腹瀉要吃什麼", "claude-sonnet-5-5")
-check("第一段加 cache_control", req["system"][0].get("cache_control") == {"type": "ephemeral"})
+orig_ttl = settings.CACHE_TTL
+check("第一段加 cache_control（預設保存 1 小時）",
+      req["system"][0].get("cache_control") == {"type": "ephemeral", "ttl": "1h"})
+settings.CACHE_TTL = "5m"
+check("CACHE_TTL=5m 時用預設 5 分鐘",
+      c.build_request(blocks, [], "q", "m")["system"][0]["cache_control"] == {"type": "ephemeral"})
+settings.CACHE_TTL = orig_ttl
 check("第二段不快取", "cache_control" not in req["system"][1])
 check("RAG 仍送字串 system", isinstance(c.build_request("abc", [], "q", "m")["system"], str))
 usage = types.SimpleNamespace(input_tokens=500, output_tokens=300, cache_read_input_tokens=20000,
@@ -108,6 +122,38 @@ resp = types.SimpleNamespace(stop_reason="end_turn", model="claude-sonnet-5-5", 
                              content=[types.SimpleNamespace(type="text", text="回答（ONC-22）")])
 r = c.parse_response(resp, "claude-sonnet-5-5")
 check("用量含快取讀取（輸入 token 總數）", r.prompt_tokens == 20500 and r.cache_read_tokens == 20000)
+
+print("\n=== 拒答處理（S1）===")
+calls = []
+
+
+def fake_create(req):
+    calls.append(req)
+    if len(calls) == 1:
+        return types.SimpleNamespace(stop_reason="refusal", model=req["model"], usage=usage, content=[],
+                                     stop_details=types.SimpleNamespace(category=None, recommended_model="claude-opus-5-5"))
+    return types.SimpleNamespace(stop_reason="end_turn", model=req["model"], usage=usage,
+                                 content=[types.SimpleNamespace(type="text", text="回答（ONC-38）")])
+
+
+c._create = fake_create
+r = c.generate(blocks, [], "手腳對冷熱感覺變遲鈍", "claude-sonnet-5-5")
+check("拒答且有建議模型 → 改用建議模型重試一次", len(calls) == 2 and calls[1]["model"] == "claude-opus-5-5")
+check("重試不再帶 server-side fallback 參數", "fallbacks" not in calls[1] and "betas" not in calls[1])
+check("重試成功後回傳答案與實際模型", not r.refused and r.model_id == "claude-opus-5-5")
+calls.clear()
+c._create = lambda req: (calls.append(req), types.SimpleNamespace(
+    stop_reason="refusal", model=req["model"], usage=usage, content=[],
+    stop_details=types.SimpleNamespace(category="bio", recommended_model=None)))[1]
+r = c.generate(blocks, [], "q", "claude-sonnet-5-5")
+check("沒有建議模型時不重試，記錄拒答類別", len(calls) == 1 and r.refused and r.refusal_category == "bio")
+orig_fb = settings.ANTHROPIC_REFUSAL_FALLBACK
+settings.ANTHROPIC_REFUSAL_FALLBACK = False
+calls.clear()
+c._create = fake_create
+r = c.generate(blocks, [], "q", "claude-sonnet-5-5")
+check("IRB 單一模型模式（不開備援）不重試", len(calls) == 1 and r.refused)
+settings.ANTHROPIC_REFUSAL_FALLBACK = orig_fb
 
 print("\n=== 分類器修正（Q1、Q2）===")
 d22 = [x for x in docs if x["code"] == "ONC-25"][:2]
@@ -133,25 +179,34 @@ class FakeClient:
     def generate(self, system_prompt, history, user_message, model_id):
         captured["system"] = system_prompt
         return LLMResult(text="改善後可吃低纖維、蛋白的食物，如稀飯、去皮雞肉（ONC-22）。", model_id=model_id,
-                         provider="anthropic", prompt_tokens=20000, completion_tokens=50)
+                         provider="anthropic", prompt_tokens=20000, completion_tokens=50,
+                         cache_read_tokens=19500, cache_write_tokens=0)
 
 
 orig_client = chat_service.get_client
 chat_service.get_client = lambda: FakeClient()
 settings.KB_MODE = "cag"
+settings.LLM_PROVIDER = "anthropic"
 try:
     resp = asyncio.run(chat_service.process_message("P801", "白血球低的時候飲食要注意什麼", channel="web"))
 finally:
-    settings.KB_MODE = orig_mode
+    settings.KB_MODE, settings.LLM_PROVIDER = orig_mode, orig_provider
     chat_service.get_client = orig_client
 check("送出兩段 system", isinstance(captured.get("system"), list) and len(captured["system"]) == 2)
 check("回答照原文（低纖維、蛋白）", "低纖維、蛋白" in resp.response)
 check("來源只列實際引用的單張", resp.sources == ["ONC-22 腹瀉"] or (len(resp.sources) == 1 and resp.sources[0].startswith("ONC-22")))
 with db.get_conn() as conn:
-    m = conn.execute("SELECT answer_quality, rag_doc_versions FROM messages WHERE patient_code='P801' "
+    m = conn.execute("SELECT answer_quality, rag_doc_versions, cache_read_tokens, cache_write_tokens "
+                     "FROM messages WHERE patient_code='P801' "
                      "AND role='bot' ORDER BY id DESC").fetchone()
 check("品質標記 grounded", m["answer_quality"] == "grounded")
 check("單張版本只記引用的 ONC-22", list(__import__("json").loads(m["rag_doc_versions"])) == ["ONC-22"])
+check("K2：快取用量寫入資料庫", m["cache_read_tokens"] == 19500 and m["cache_write_tokens"] == 0)
+import stats
+header = stats.export_csv("messages").splitlines()[0]
+check("K2：研究匯出包含快取用量與拒答類別", "cache_read_tokens" in header and "refusal_category" in header)
+with db.get_conn() as conn:
+    check("資料庫 schema v7", conn.execute("SELECT MAX(version) v FROM schema_version").fetchone()["v"] == 7)
 
 print(f"\n通過 {_pass} / {_pass + _fail}")
 if _fail:

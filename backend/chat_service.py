@@ -242,6 +242,8 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
         db.add_message(pid, "bot", lead + reply, rag_sources=sources,
                        model_id=result.model_id, provider=result.provider,
                        prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
+                       cache_read_tokens=result.cache_read_tokens, cache_write_tokens=result.cache_write_tokens,
+                       refusal_category=result.refusal_category,
                        answer_quality=label, rag_doc_versions=versions)
         db.add_alert(pid, f"衛教資料無法回答：{query_text[:40]}", "info", msg_id, notified_channels=[])
         return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
@@ -250,6 +252,7 @@ async def _rag_answer(pid: str, query_text: str, flag, msg_id: int, channel: Cha
     db.add_message(pid, "bot", lead + reply, rag_sources=sources,
                    model_id=result.model_id, provider=result.provider,
                    prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens,
+                   cache_read_tokens=result.cache_read_tokens, cache_write_tokens=result.cache_write_tokens,
                    answer_quality=label, rag_doc_versions=versions)
     return _response(pid, lead + reply, sources=sources, keywords=flag.matched_keywords)
 

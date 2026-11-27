@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 6   # v2：assessment_state；v3：events.actor + LINE 通行碼綁定；v4：messages.rag_doc_versions；v5：patients.department；v6：leaflet_versions
+SCHEMA_VERSION = 7   # v2：assessment_state；v3：events.actor + LINE 通行碼綁定；v4：messages.rag_doc_versions；v5：patients.department；v6：leaflet_versions；v7：messages 快取用量與拒答類別
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "tumor_bot.sqlite3"
 
 
@@ -231,6 +231,13 @@ def init_db() -> None:
         if "rag_doc_versions" not in mcols:
             conn.execute("ALTER TABLE messages ADD COLUMN rag_doc_versions TEXT")
 
+        # v7 遷移：CAG 的 prompt cache 用量（每週算命中率與實際費用）與拒答類別（統計拒答率）
+        mcols = {r["name"] for r in conn.execute("PRAGMA table_info(messages)")}
+        for col, typ in (("cache_read_tokens", "INTEGER"), ("cache_write_tokens", "INTEGER"),
+                         ("refusal_category", "TEXT")):
+            if col not in mcols:
+                conn.execute(f"ALTER TABLE messages ADD COLUMN {col} {typ}")
+
         # v5 遷移：病患所屬科別（決定知識庫範圍、紅旗設定、症狀評估與緊急電話）
         pcols = {r["name"] for r in conn.execute("PRAGMA table_info(patients)")}
         if "department" not in pcols:
@@ -288,20 +295,24 @@ def add_message(
     completion_tokens: int | None = None,
     answer_quality: str | None = None,
     rag_doc_versions: dict[str, str] | None = None,
+    cache_read_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+    refusal_category: str | None = None,
 ) -> int:
     with get_conn() as conn:
         cur = conn.execute(
             """INSERT INTO messages
                (patient_code, role, content, ts, redflag_level, redflag_terms,
                 rag_sources, model_id, provider, prompt_tokens, completion_tokens, answer_quality,
-                rag_doc_versions)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                rag_doc_versions, cache_read_tokens, cache_write_tokens, refusal_category)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 patient_code, role, content, _now(), redflag_level,
                 json.dumps(redflag_terms or [], ensure_ascii=False),
                 json.dumps(rag_sources or [], ensure_ascii=False),
                 model_id, provider, prompt_tokens, completion_tokens, answer_quality,
                 json.dumps(rag_doc_versions, ensure_ascii=False) if rag_doc_versions else None,
+                cache_read_tokens, cache_write_tokens, refusal_category,
             ),
         )
         return cur.lastrowid

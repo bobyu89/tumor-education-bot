@@ -296,7 +296,7 @@ with TestClient(main.app) as client:
           {"leaflet_draft", "leaflet_publish", "leaflet_retire", "leaflet_restore", "leaflet_discard"} <= set(ev))
     check("其他單張的段落沒有受影響（總數 = 原本 + ONC-99 一版的 2 段）", col.count() == BASE + 2)
     with db.get_conn() as conn:
-        check("資料庫 schema v6", conn.execute("SELECT MAX(version) v FROM schema_version").fetchone()["v"] == 6)
+        check("資料庫 schema 至少 v6", conn.execute("SELECT MAX(version) v FROM schema_version").fetchone()["v"] >= 6)
 
 print(f"\n通過 {_pass} / {_pass + _fail}")
 if _fail:

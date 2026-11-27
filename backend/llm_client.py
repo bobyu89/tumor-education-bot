@@ -31,7 +31,8 @@ class LLMResult:
     completion_tokens: int | None = None
     refused: bool = False               # 模型基於安全政策拒答（stop_reason == "refusal"）
     cache_read_tokens: int = 0          # CAG：從 prompt cache 讀取的 token（計費約 1/10）
-    cache_write_tokens: int = 0         # CAG：寫入 prompt cache 的 token（計費約 1.25 倍）
+    cache_write_tokens: int = 0         # CAG：寫入 prompt cache 的 token（5m 約 1.25 倍、1h 約 2 倍）
+    refusal_category: str | None = None   # 拒答時 stop_details.category（cyber、bio… 或 None）
 
 
 def system_text(system_prompt: "str | list[str]") -> str:
@@ -120,7 +121,10 @@ class ClaudeClient:
             system = system_prompt
         else:
             # CAG：固定前段（安全規則＋本科全部單張＋回答規則）標記快取；同科別的下一則提問直接讀快取
-            system = [{"type": "text", "text": system_prompt[0], "cache_control": {"type": "ephemeral"}},
+            cache = {"type": "ephemeral"}
+            if settings.CACHE_TTL == "1h":
+                cache["ttl"] = "1h"
+            system = [{"type": "text", "text": system_prompt[0], "cache_control": cache},
                       *({"type": "text", "text": t} for t in system_prompt[1:])]
         req = {
             "model": model_id,
@@ -136,11 +140,26 @@ class ClaudeClient:
 
     def generate(self, system_prompt: str, history: list[dict], user_message: str,
                  model_id: str) -> LLMResult:
-        a = self._anthropic
         req = self.build_request(system_prompt, history, user_message, model_id)
+        resp = self._create(req)
+        result = self.parse_response(resp, model_id)
+        # 拒答且 server-side fallback 沒有接手時（例如備援模型忙碌），API 會在 stop_details.recommended_model
+        # 建議改用哪個模型：照建議直接重試一次。IRB 要求單一模型（ANTHROPIC_REFUSAL_FALLBACK=false）時不重試。
+        recommended = getattr(getattr(resp, "stop_details", None), "recommended_model", None)
+        if (result.refused and recommended and recommended != result.model_id
+                and settings.ANTHROPIC_REFUSAL_FALLBACK):
+            logging.warning("[LLM] 拒答後改用建議模型 %s 重試", recommended)
+            retry = self.build_request(system_prompt, history, user_message, recommended)
+            retry.pop("fallbacks", None)
+            retry.pop("betas", None)
+            result = self.parse_response(self._create(retry), recommended)
+        return result
+
+    def _create(self, req: dict):
+        a = self._anthropic
         api = self.client.beta.messages if "betas" in req else self.client.messages
         try:
-            resp = api.create(**req)
+            return api.create(**req)
         except a.RateLimitError as e:
             raise LLMError(f"429 rate limited: {e}") from e
         except a.APITimeoutError as e:
@@ -149,14 +168,14 @@ class ClaudeClient:
             raise LLMError(f"{e.status_code}: {e.message}") from e
         except a.APIConnectionError as e:
             raise LLMError(f"connection error: {e}") from e
-        return self.parse_response(resp, model_id)
 
     def parse_response(self, resp, requested_model: str) -> LLMResult:
         refused = resp.stop_reason == "refusal"
+        details = getattr(resp, "stop_details", None) if refused else None
         if refused:
-            details = getattr(resp, "stop_details", None)
-            logging.warning("[LLM] 模型拒答 category=%s request_id=%s",
-                            getattr(details, "category", None), getattr(resp, "_request_id", None))
+            logging.warning("[LLM] 模型拒答 category=%s recommended_model=%s request_id=%s",
+                            getattr(details, "category", None), getattr(details, "recommended_model", None),
+                            getattr(resp, "_request_id", None))
         text = "" if refused else "".join(b.text for b in resp.content if b.type == "text")
         cache_read = getattr(resp.usage, "cache_read_input_tokens", 0) or 0
         cache_write = getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
@@ -170,6 +189,7 @@ class ClaudeClient:
             refused=refused,
             cache_read_tokens=cache_read,
             cache_write_tokens=cache_write,
+            refusal_category=(getattr(details, "category", None) or "unknown") if refused else None,
         )
 
 

@@ -42,11 +42,16 @@ EVAL = json.loads((ROOT / "backend" / "retrieval_eval.json").read_text(encoding=
 DEPT = "hemato-oncology"
 OUT_DIR = ROOT / "eval_results"
 
-# 每百萬 token 的美元價格（Anthropic 官方定價，2026-11）
+# 每百萬 token 的美元價格（Anthropic 官方定價，2026-11）。快取寫入：5 分鐘 1.25 倍、1 小時 2 倍（CACHE_TTL）
 PRICES = {
-    "claude-sonnet-5-5": {"in": 2.0, "out": 10.0, "cache_read": 0.10, "cache_write": 2.5},
-    "claude-opus-5-5": {"in": 4.0, "out": 20.0, "cache_read": 0.20, "cache_write": 5.0},
+    "claude-sonnet-5-5": {"in": 2.0, "out": 10.0, "cache_read": 0.10},
+    "claude-opus-5-5": {"in": 4.0, "out": 20.0, "cache_read": 0.20},
 }
+
+
+def _write_mult() -> float:
+    from config import settings
+    return 2.0 if settings.CACHE_TTL == "1h" else 1.25
 JUDGE_MODEL = "claude-opus-5-5"
 
 BOUNDARY = [
@@ -102,7 +107,7 @@ def cost_of(model: str, usage: dict) -> float | None:
         return None
     return (usage.get("input_tokens", 0) * p["in"] + usage.get("output_tokens", 0) * p["out"]
             + usage.get("cache_read_input_tokens", 0) * p["cache_read"]
-            + usage.get("cache_creation_input_tokens", 0) * p["cache_write"]) / 1e6
+            + usage.get("cache_creation_input_tokens", 0) * p["in"] * _write_mult()) / 1e6
 
 
 def build_items(limit: int | None) -> list[dict]:
@@ -132,10 +137,20 @@ def run_one(item: dict, model: str, ctx: dict, mode: str = "rag") -> dict:
     result = client.parse_response(resp, model)
     usage = {k: getattr(resp.usage, k, 0) or 0
              for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")}
-    fallback = any(getattr(it, "type", "") == "fallback_message" for it in (getattr(resp.usage, "iterations", None) or []))
+    iterations = getattr(resp.usage, "iterations", None) or []
+    fallback = any(getattr(it, "type", "") == "fallback_message" for it in iterations)
+    details = getattr(resp, "stop_details", None)
+    refusal = None if resp.stop_reason != "refusal" else {
+        "category": getattr(details, "category", None),
+        "explanation": getattr(details, "explanation", None),
+        "recommended_model": getattr(details, "recommended_model", None),
+        "iterations": [getattr(it, "type", "") for it in iterations],
+        "request_id": getattr(resp, "_request_id", None),
+    }
     label = "llm_refusal" if result.refused or not result.text.strip() else \
         quality.classify(result.text, docs, ctx["known"])
     return {**rec, "label": label, "reply": result.text, "served_by": result.model_id, "fallback": fallback,
+            "refusal": refusal,
             "stop_reason": resp.stop_reason, "latency_s": round(latency, 2), "usage": usage,
             "cost": cost_of(result.model_id if result.model_id in PRICES else model, usage),
             "cited": sorted(quality.cited_codes(result.text, ctx["known"])),
@@ -258,7 +273,7 @@ def main():
             for m in args.models:
                 p = PRICES[m]
                 # CAG：第一題寫快取（1.25 倍），之後讀快取（約 1/10）
-                inp = (per_q * p["cache_write"] + (len(items) - 1) * per_q * p["cache_read"]) if k == "cag" \
+                inp = (per_q * p["in"] * _write_mult() + (len(items) - 1) * per_q * p["cache_read"]) if k == "cag" \
                     else len(items) * per_q * p["in"]
                 est = (inp + len(items) * 600 * p["out"]) / 1e6
                 print(f"  {m}: 約 ${est:.2f}（假設每題輸出含思考約 600 token）")
