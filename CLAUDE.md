@@ -12,6 +12,7 @@
 - 管理者可在網頁「單張管理」上傳 Word／Markdown／PDF、上架、停用、退回（`backend/leaflets.py`，見 `docs/knowledge/單張管理後台.md`）：上架版本寫在 `data/leaflets/<科別>/<代碼>.md` 覆蓋層（同代碼優先於原始單張），版本紀錄在 `leaflet_versions`，上架即同步索引。
 - 直接改 repo 單張時：新增、改版（改 frontmatter 的 `doc_version`）或停用（`rag_index: false`）後，執行 `python -X utf8 scripts/index_vault.py` 同步：舊版與停用單張的段落會被刪除，不需 `--rebuild`。引用核對用知識庫實際的單張代碼，不寫死代碼格式。
 - 紅旗規則單一來源是 `backend/redflag.py`，病患端安全文字是 `backend/safety_text.py`；改了要跑 `python -X utf8 scripts/build_pages.py` 重建 `docs/demo_data.js`（演示引擎直接讀匯出的規則）。
+- Cloudflare 測試部署：`deploy/cloudflare/`（Worker + 容器，網站密碼保護；硬碟暫時、只供測試），映像用根目錄 Dockerfile 加 `BAKE_MODELS=1`；步驟見 `docs/deploy/Cloudflare測試部署.md`。
 - 演示不需 API key：`.env` 設 `LLM_PROVIDER=mock`；`scripts/seed_demo.py --reset` 植入模擬病患，`scripts/demo_dry_run.py` 彩排 9 個情境；腳本在 `docs/demo/演示腳本.md`。
 
 ## Agent skills

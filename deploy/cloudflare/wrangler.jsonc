@@ -1,0 +1,37 @@
+// 腫瘤衛教機器人：Cloudflare Containers 測試部署。說明：docs/deploy/Cloudflare測試部署.md
+// 容器硬碟是暫時的：容器休眠或重新部署後資料庫清空（只適合測試，不可放真實病人資料）。
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "tumor-education-bot",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-12",
+  "observability": { "enabled": true },
+  "containers": [
+    {
+      "class_name": "Bot",
+      // 用 repo 根目錄的 Dockerfile，建置時就把嵌入模型與索引做進映像
+      "image": "../../Dockerfile",
+      "image_build_context": "../..",
+      "image_vars": { "BAKE_MODELS": "1" },
+      // 兩個嵌入模型約需 1 GB 記憶體：standard-1 = 1/2 vCPU、4 GiB、8 GB 硬碟
+      "instance_type": "standard-1",
+      // 系統只能跑單一實例（護理端即時連線與 LINE 去重都在同一個行程內）
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "BOT", "class_name": "Bot" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Bot"] }],
+  "vars": {
+    "PRIMARY_MODEL": "claude-sonnet-5-5",
+    "LLM_EFFORT": "low",
+    // 測試用示範帳號（P001／R001／A001）；整個網站另有 SITE_PASSWORD 保護
+    "DEMO_SEED": "true"
+  }
+  // Secrets（在 Cloudflare 後台 Worker → Settings → Variables and Secrets 設定，不寫在這裡）：
+  //   SITE_PASSWORD      必填：進入網站的密碼（帳號隨意）
+  //   ANTHROPIC_API_KEY  選填：沒有時用演示模式（不呼叫 Claude）
+  //   AUTH_SECRET        選填：登入 token 簽章密鑰；沒有時每次容器啟動隨機產生
+  //   ADMIN_PASSWORD     選填：另外建立 admin 帳號
+}
