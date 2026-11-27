@@ -3,7 +3,8 @@ Claude Sonnet 5.5 / Opus 5.5 串接測試（不呼叫 API、不需 API key、不
 
 用假的 API 物件攔截 messages.create 的參數，驗證：
   - 不送 temperature（Sonnet 5.5 / Opus 5.5 會回 400），改用 output_config.effort
-  - 預設開啟 server-side fallback；可用設定關閉
+  - 研究收案預設關閉 server-side fallback（單一模型）；可用設定開啟
+  - 預設只在美國運算（inference_geo=us）
   - 只取 text 區塊（略過 thinking）；記錄實際回答的模型
   - 拒答（stop_reason=refusal）→ refused=True；chat_service 改回固定轉介並進待處理清單
   - SDK 例外轉成 chat_service 能分類的 LLMError
@@ -77,17 +78,27 @@ check("不送 temperature / top_p / top_k", not ({"temperature", "top_p", "top_k
 check("output_config.effort = low（預設）", req["output_config"] == {"effort": "low"})
 check("不設定 thinking（兩個模型皆為 adaptive）", "thinking" not in req)
 check("max_tokens 足夠容納思考（≥2000）", req["max_tokens"] >= 2000)
-check("server-side fallback 預設開啟", req["fallbacks"] == "default" and req["betas"] == ["server-side-fallback-2026-07-01"])
+check("server-side fallback 預設關閉（研究只用單一模型）", "fallbacks" not in req and "betas" not in req)
+check("預設只在美國運算（inference_geo=us）", req["extra_body"] == {"inference_geo": "us"})
 check("角色對應 patient→user、bot→assistant",
       [m["role"] for m in req["messages"]] == ["user", "assistant", "user"])
 check("system prompt 走原生 system 欄位", req["system"] == "系統提示")
-settings.ANTHROPIC_REFUSAL_FALLBACK = False
-req2 = c.build_request("s", [], "q", "claude-opus-5-5")
-check("關閉 fallback：不帶 betas／fallbacks", "fallbacks" not in req2 and "betas" not in req2)
-check("Opus 5.5 模型 ID", req2["model"] == "claude-opus-5-5")
 settings.ANTHROPIC_REFUSAL_FALLBACK = True
+req2 = c.build_request("s", [], "q", "claude-opus-5-5")
+check("開啟 fallback：帶 betas／fallbacks", req2["fallbacks"] == "default" and req2["betas"] == ["server-side-fallback-2026-07-01"])
+check("Opus 5.5 模型 ID", req2["model"] == "claude-opus-5-5")
+settings.ANTHROPIC_INFERENCE_GEO = ""
+check("ANTHROPIC_INFERENCE_GEO 留空：不送 inference_geo", "extra_body" not in c.build_request("s", [], "q", "claude-opus-5-5"))
+settings.ANTHROPIC_INFERENCE_GEO = "us"
+from config import Settings
+try:
+    Settings(ANTHROPIC_INFERENCE_GEO="tw")
+    check("ANTHROPIC_INFERENCE_GEO 只接受 us／global／空白", False)
+except Exception:
+    check("ANTHROPIC_INFERENCE_GEO 只接受 us／global／空白", True)
 
 print("\n=== 回應解析 ===")
+settings.ANTHROPIC_REFUSAL_FALLBACK = True
 beta = FakeAPI(fake_resp())
 r = client_with(beta).generate("s", HIST, "q", "claude-sonnet-5-5")
 check("走 beta endpoint（fallback 需要）", len(beta.calls) == 1)
@@ -101,7 +112,6 @@ settings.ANTHROPIC_REFUSAL_FALLBACK = False
 ga = FakeAPI(fake_resp())
 client_with(FakeAPI(), ga).generate("s", [], "q", "claude-sonnet-5-5")
 check("關閉 fallback 時走一般 endpoint", len(ga.calls) == 1)
-settings.ANTHROPIC_REFUSAL_FALLBACK = True
 
 print("\n=== 真實 SDK 序列化（本機模擬 HTTP，不連網）===")
 import json as _json
@@ -119,6 +129,7 @@ def _handler(request):
         "usage": {"input_tokens": 10, "output_tokens": 5}})
 
 
+settings.ANTHROPIC_REFUSAL_FALLBACK = True
 real = ClaudeClient()
 real.client = anthropic.Anthropic(api_key="sk-ant-test-dummy",
                                   http_client=httpx2.Client(transport=httpx2.MockTransport(_handler)))
@@ -128,6 +139,12 @@ check("SDK 送出的 body 不含 temperature", "temperature" not in b)
 check("SDK 送出 output_config.effort", b.get("output_config") == {"effort": "low"})
 check("SDK 送出 fallbacks=default", b.get("fallbacks") == "default")
 check("SDK 帶 fallback beta header", "server-side-fallback-2026-07-01" in captured["headers"].get("anthropic-beta", ""))
+check("SDK 送出 inference_geo=us（beta endpoint）", b.get("inference_geo") == "us")
+settings.ANTHROPIC_REFUSAL_FALLBACK = False
+r = real.generate("系統提示", HIST, "要怎麼漱口？", "claude-sonnet-5-5")
+b = captured["body"]
+check("SDK 送出 inference_geo=us（一般 endpoint，研究預設）", b.get("inference_geo") == "us" and "fallbacks" not in b)
+check("一般 endpoint 不帶 fallback beta header", "server-side-fallback" not in captured["headers"].get("anthropic-beta", ""))
 check("SDK 回應解析：只取 text", r.text == "請用軟毛牙刷。" and r.model_id == "claude-sonnet-5-5")
 
 print("\n=== 例外轉換 ===")
@@ -138,7 +155,7 @@ for exc, needle in [
     (anthropic.APIConnectionError(request=req_obj), "connection"),
 ]:
     try:
-        client_with(FakeAPI(exc=exc)).generate("s", [], "q", "claude-sonnet-5-5")
+        client_with(FakeAPI(exc=exc), FakeAPI(exc=exc)).generate("s", [], "q", "claude-sonnet-5-5")
         check(f"{type(exc).__name__} → LLMError", False)
     except LLMError as e:
         check(f"{type(exc).__name__} → LLMError（含「{needle}」）", needle in str(e).lower())

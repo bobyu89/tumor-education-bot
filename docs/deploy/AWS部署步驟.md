@@ -23,9 +23,12 @@
    安裝腳本預設部署 `main`，而目前的系統改動都還在 PR #1 的分支上。
    - 建議：在 GitHub 合併 PR #1 後再部署。
    - 若先不合併：第 4 步改用 `sudo BRANCH=ccr-7e03a287-h1n6by bash /opt/tumor-bot/install.sh`
-2. **Anthropic API 金鑰**：console.anthropic.com → API Keys → Create Key，複製 `sk-ant-` 開頭的金鑰（第 4 步才用）。
-3. **下載兩個檔案**到自己電腦：GitHub repo → `deploy/aws/` →
-   `create_instance.sh` 與 `install.sh`，各自打開後按右上「Download raw file」。
+2. **Anthropic API 金鑰**（第 4 步才用）：資料要留在美國，所以金鑰要建在美國資料區域的工作區：
+   console.anthropic.com → Settings → Workspaces → Create Workspace，**Workspace geo 選 US**（建立後不能改），
+   建議同時把允許的 inference geo 限定為 `us`。再到 API Keys → Create Key，工作區選剛建的那個，複製 `sk-ant-` 開頭的金鑰。
+   程式預設每個請求都帶 `inference_geo=us`（`ANTHROPIC_INFERENCE_GEO`，Claude 價格 1.1 倍）。
+3. **下載三個檔案**到自己電腦：GitHub repo → `deploy/aws/` →
+   `create_instance.sh`、`install.sh`、`enable_backup.sh`，各自打開後按右上「Download raw file」。
 
 ## 步驟 1：啟用台北區（只需做一次）
 
@@ -36,14 +39,15 @@ AWS 主控台右上角帳號名稱 → **Account** → 往下找 **AWS Regions**
 
 1. 主控台右上角把地區切到 **Asia Pacific (Taipei)**。
 2. 點右上角的 **CloudShell** 圖示（`>_`），等終端機出現。
-3. CloudShell 右上 **Actions → Upload file**，把 `create_instance.sh` 和 `install.sh` 都上傳（一次一個）。
+3. CloudShell 右上 **Actions → Upload file**，把 `create_instance.sh`、`install.sh`、`enable_backup.sh` 都上傳（一次一個）。
 4. 輸入：
    ```bash
    bash create_instance.sh
    ```
 5. 約 2 分鐘後完成，畫面會顯示**主機編號、固定 IP 與網址**（`https://<IP>.sslip.io`），請記下來。
 
-腳本建立的東西：主機 `tumor-bot`、安全群組 `tumor-bot-web`（對外只開 80、443）、固定 IP、IAM 角色 `tumor-bot-ssm`（讓你從瀏覽器登入主機）。
+腳本建立的東西：主機 `tumor-bot`、加密硬碟 `tumor-bot-data`、安全群組 `tumor-bot-web`（對外只開 80、443）、固定 IP、IAM 角色 `tumor-bot-ssm`（讓你從瀏覽器登入主機），
+以及每日加密快照規則（台灣時間 02:00，保留 7 份）。
 主機開啟了「終止保護」，硬碟設為主機刪除後仍保留，避免誤刪資料。
 
 ## 步驟 3：登入主機
@@ -87,8 +91,15 @@ sudo bash /opt/tumor-bot/install.sh
 
 **衛教單張改版**：用管理者帳號登入 →「📚 單張管理」上傳 Word／PDF，預覽後上架，立即生效（見 `docs/knowledge/單張管理後台.md`）。
 
-**備份**：病人資料與後台上架的單張（`data/leaflets/`）都在主機硬碟的 Docker volume 裡。建議在 EC2 主控台 → **生命週期管理員（Data Lifecycle Manager）**
-建立每日快照規則，目標選標籤 `Name = tumor-bot-data` 的硬碟，保留 7 份。
+**備份**：病人資料與後台上架的單張（`data/leaflets/`）都在主機硬碟（已加密）的 Docker volume 裡。
+`create_instance.sh` 會自動執行 `enable_backup.sh`：先確認硬碟有加密，再建立每日快照規則（台灣時間 02:00，保留 7 份，快照同樣加密）。
+之前已建好主機的人，在 CloudShell 上傳 `enable_backup.sh` 後執行 `bash enable_backup.sh` 即可。保留份數可用 `RETAIN=30 bash enable_backup.sh` 調整。
+
+**還原測試**（上線前做一次）：EC2 → 快照 → 選 `tumor-bot-snapshot` → 建立磁碟區 → 掛到一台測試主機，確認 `tumor_bot.sqlite3` 打得開。
+需要另存一份到主機以外的地方時，可在主機上用 `deploy/backup.sh` 產生加密備份檔（見部署說明「加密備份」）。
+
+**硬碟沒有加密時**（早期用其他方式建立的主機）：停止主機 → 對硬碟建立快照 → 「複製快照」時勾選加密 →
+從加密快照建立新硬碟 → 換掉主機的根磁碟。或直接用 `create_instance.sh` 另建一台，再用 `deploy/backup.sh`／`restore.sh` 搬資料。
 
 ## 停止與刪除
 

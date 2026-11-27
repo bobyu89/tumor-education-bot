@@ -18,7 +18,12 @@ class Settings(BaseSettings):
     LLM_EFFORT: str = "low"                   # low | medium | high | xhigh | max；衛教問答用 low 即可
     LLM_MAX_TOKENS: int = 4000                # 含模型思考的 token，不要設太小以免回答被截斷
     LLM_TIMEOUT_SEC: float = 60.0
-    ANTHROPIC_REFUSAL_FALLBACK: bool = True   # 拒答時由 API 改用備援模型；IRB 要求單一模型時設 false
+    # 拒答時是否由 API 改用備援模型。研究收案預設 false：全部回覆出自同一個模型（IRB C202605191 委員一第 1 點）；
+    # 拒答時改為同模型重試一次，仍拒答回固定轉介文字。非研究用途想減少拒答時可設 true
+    ANTHROPIC_REFUSAL_FALLBACK: bool = False
+    # 模型在哪裡運算：us = 只在美國境內（價格 1.1 倍）；global = Anthropic 任一地區；空字串 = 不送這個參數。
+    # 研究收案用 us，資料不會送到美國以外的國家（IRB 委員一第 1 點）。另須在 Anthropic Console 使用美國資料區域的工作區
+    ANTHROPIC_INFERENCE_GEO: str = "us"
 
     # ── RAG ──
     CHROMA_DB_PATH: str = str(Path(__file__).parent.parent / "chroma_db")
@@ -63,6 +68,14 @@ class Settings(BaseSettings):
     ALERT_SLA_HIGH_MIN: int = 15
     ALERT_SLA_MEDIUM_MIN: int = 240
     ALERT_SLA_INFO_MIN: int = 1440
+
+    @field_validator("ANTHROPIC_INFERENCE_GEO")
+    @classmethod
+    def _check_geo(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in ("us", "global", ""):
+            raise ValueError("ANTHROPIC_INFERENCE_GEO 只能是 us、global 或空白")
+        return v
 
     @field_validator("CHROMA_DB_PATH")
     @classmethod
