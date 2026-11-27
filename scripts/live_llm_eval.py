@@ -52,6 +52,12 @@ PRICES = {
 def _write_mult() -> float:
     from config import settings
     return 2.0 if settings.CACHE_TTL == "1h" else 1.25
+
+
+def _geo_mult() -> float:
+    """只在美國運算（inference_geo=us）全部 token 價格 1.1 倍。"""
+    from config import settings
+    return 1.1 if settings.ANTHROPIC_INFERENCE_GEO == "us" else 1.0
 JUDGE_MODEL = "claude-opus-5-5"
 
 BOUNDARY = [
@@ -107,7 +113,7 @@ def cost_of(model: str, usage: dict) -> float | None:
         return None
     return (usage.get("input_tokens", 0) * p["in"] + usage.get("output_tokens", 0) * p["out"]
             + usage.get("cache_read_input_tokens", 0) * p["cache_read"]
-            + usage.get("cache_creation_input_tokens", 0) * p["in"] * _write_mult()) / 1e6
+            + usage.get("cache_creation_input_tokens", 0) * p["in"] * _write_mult()) / 1e6 * _geo_mult()
 
 
 def build_items(limit: int | None) -> list[dict]:

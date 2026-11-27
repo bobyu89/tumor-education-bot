@@ -2,7 +2,7 @@
 # 在 AWS CloudShell 執行：在台北區（ap-east-2）建立一台跑腫瘤衛教機器人的 EC2 主機。
 # 步驟說明：docs/deploy/AWS部署步驟.md
 #
-#   把這個檔案與同資料夾的 install.sh 上傳到 CloudShell，然後：
+#   把這個檔案與同資料夾的 install.sh、enable_backup.sh 上傳到 CloudShell，然後：
 #       bash create_instance.sh
 #
 # 會建立（名稱都以 tumor-bot 開頭，重複執行不會重複建立）：
@@ -10,6 +10,7 @@
 #   - 安全群組：對外只開 80、443；不開 SSH（用瀏覽器的 Session Manager 或 EC2 Instance Connect 登入）
 #   - 固定 IP（Elastic IP）：網址 <IP>.sslip.io 才不會因重開機而變
 #   - IAM 角色：讓主機能用 Session Manager 登入（不需要 SSH 金鑰）
+#   - 每日加密快照：台灣時間 02:00，保留 7 份（enable_backup.sh）
 # 可用環境變數覆寫：REGION、NAME、INSTANCE_TYPE、DISK_GB
 set -euo pipefail
 
@@ -173,6 +174,14 @@ ALLOC=$(aws ec2 allocate-address --domain vpc \
           --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=$NAME}]" \
           --query AllocationId --output text)
 aws ec2 associate-address --instance-id "$IID" --allocation-id "$ALLOC" >/dev/null
+
+# ── 8. 每日加密快照（備份）──
+if [ -f "$HERE/enable_backup.sh" ]; then
+  REGION="$REGION" NAME="$NAME" bash "$HERE/enable_backup.sh" \
+    || echo "⚠ 每日快照沒有設定成功，請稍後單獨執行：bash enable_backup.sh"
+else
+  echo "⚠ 沒有找到 enable_backup.sh：請把 deploy/aws/enable_backup.sh 上傳到 CloudShell 後執行 bash enable_backup.sh，設定每日加密快照"
+fi
 
 say "完成"
 show_info "$IID"

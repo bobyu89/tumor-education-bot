@@ -94,10 +94,12 @@ class ClaudeClient:
         衛教問答不需要深度推理，預設 effort=low（LLM_EFFORT），回應較快。
       - 兩個模型都是 adaptive thinking（Opus 5.5 無法關閉），不另外設定 thinking。
         思考 token 也算在 max_tokens 內，所以 max_tokens 不能設太小（LLM_MAX_TOKENS）。
-      - 可能因安全政策拒答（stop_reason == "refusal"）。預設開啟 server-side fallback（fallbacks="default"），
-        由 API 改用伺服器指定的備援模型重跑；實際回答的模型記在 LLMResult.model_id（resp.model），
-        研究資料可據此區分。若 IRB 要求只能用單一模型，設 ANTHROPIC_REFUSAL_FALLBACK=false。
+      - 可能因安全政策拒答（stop_reason == "refusal"）。研究收案預設 ANTHROPIC_REFUSAL_FALLBACK=false：
+        不換模型，同模型重試一次，全部回覆出自同一個模型。設 true 時開啟 server-side fallback（fallbacks="default"），
+        由 API 改用伺服器指定的備援模型重跑；實際回答的模型都記在 LLMResult.model_id（resp.model）。
         整條鏈仍拒答時回傳 refused=True，由 chat_service 改回固定轉介文字（不顯示空白）。
+      - 資料所在地：ANTHROPIC_INFERENCE_GEO=us（預設）時每個請求帶 inference_geo="us"，只在美國境內運算。
+        以 extra_body 送出，舊版 SDK 也能用。
     """
     provider = "anthropic"
     FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -133,6 +135,8 @@ class ClaudeClient:
             "messages": messages,
             "output_config": {"effort": settings.LLM_EFFORT},
         }
+        if settings.ANTHROPIC_INFERENCE_GEO:
+            req["extra_body"] = {"inference_geo": settings.ANTHROPIC_INFERENCE_GEO}
         if settings.ANTHROPIC_REFUSAL_FALLBACK:
             req["betas"] = [self.FALLBACK_BETA]
             req["fallbacks"] = "default"

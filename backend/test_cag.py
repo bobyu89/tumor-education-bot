@@ -124,6 +124,8 @@ r = c.parse_response(resp, "claude-sonnet-5-5")
 check("用量含快取讀取（輸入 token 總數）", r.prompt_tokens == 20500 and r.cache_read_tokens == 20000)
 
 print("\n=== 拒答處理（S1）===")
+orig_fb = settings.ANTHROPIC_REFUSAL_FALLBACK
+settings.ANTHROPIC_REFUSAL_FALLBACK = True   # 先測開啟備援的行為；研究預設（false）在下面測
 calls = []
 
 
@@ -149,13 +151,13 @@ r = c.generate(blocks, [], "q", "claude-sonnet-5-5")
 check("沒有建議模型時同模型重試一次（S1：分類器偶發誤判）",
       len(calls) == 2 and calls[1]["model"] == "claude-sonnet-5-5" and calls[1] == calls[0])
 check("重試仍拒答 → 回報拒答並記錄類別（不無限重試）", r.refused and r.refusal_category == "bio")
-orig_fb = settings.ANTHROPIC_REFUSAL_FALLBACK
 settings.ANTHROPIC_REFUSAL_FALLBACK = False
 calls.clear()
 c._create = fake_create
 r = c.generate(blocks, [], "q", "claude-sonnet-5-5")
 check("IRB 單一模型模式：不換建議模型，只用同模型重試",
       len(calls) == 2 and calls[1]["model"] == "claude-sonnet-5-5" and not r.refused)
+check("重試也只在美國運算", all(x.get("extra_body") == {"inference_geo": "us"} for x in calls))
 settings.ANTHROPIC_REFUSAL_FALLBACK = orig_fb
 
 print("\n=== 分類器修正（Q1、Q2）===")
